@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "name": "kb-paper-ingest",
+      "path": "skills/local/kb-paper-ingest/SKILL.md",
+      "kind": "local",
+      "version": "0.4.0",
+      "source": "project-authored",
+      "license": "project-internal-no-external-license-declared",
+      "purpose": "论文元信息、默认概述、翻译入口与全文检索索引入库"
+    },
+    {
+      "name": "kb-note-ingest",
+      "path": "skills/local/kb-note-ingest/SKILL.md",
+      "kind": "local",
+      "version": "0.3.0",
+      "source": "project-authored",
+      "license": "project-internal-no-external-license-declared",
+      "purpose": "网页资料与个人知识笔记入库"
+    },
+    {
+      "name": "kb-content-update",
+      "path": "skills/local/kb-content-update/SKILL.md",
+      "kind": "local",
+      "version": "0.4.0",
+      "source": "project-authored",
+      "license": "project-internal-no-external-license-declared",
+      "purpose": "已有内容更新及评论保留影响报告"
+    }
+  ]
+}
