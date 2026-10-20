@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "dataRoots": {
+    "docs": "sources/docs",
+    "comments": "sources/comments"
+  },
+  "localInputs": {
+    "papers": "local-data/papers",
+    "translations": "local-data/translations",
+    "work": "local-data/work"
+  },
+  "note": "Local-only paths. This file is an example; no private data is loaded by the public reader build."
+}

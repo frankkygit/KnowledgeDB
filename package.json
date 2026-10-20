@@ -1,0 +1,22 @@
+{
+  "name": "knowledge-db-reader",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev site",
+    "build": "vitepress build site",
+    "preview": "vitepress preview site",
+    "preview:private": "KNOWLEDGE_LOCAL_PRIVATE_PREVIEW=1 vitepress dev site --host 127.0.0.1",
+    "setup:local": "node scripts/init-local.mjs",
+    "check": "node scripts/check.mjs",
+    "check:public": "node scripts/check-public-build.mjs"
+  },
+  "dependencies": {
+    "vue": "3.5.13"
+  },
+  "devDependencies": {
+    "markdown-it-mathjax3": "^4.3.2",
+    "vitepress": "1.6.4"
+  }
+}

@@ -1,0 +1,23 @@
+# Local raw papers, original translations and intermediate outputs: never upload.
+/local-data/
+
+# Private data checkouts are local until explicitly registered as submodules.
+/sources/docs/
+/sources/comments/
+
+# Machine-specific configuration and secrets.
+/knowledge.config.local.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and generated site output.
+node_modules/
+/site/.vitepress/cache/
+/site/.vitepress/dist/
+/site/.vitepress/.temp/
+coverage/
+*.log
+.DS_Store
