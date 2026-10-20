@@ -131,6 +131,7 @@ async function openResult(item: any) {
 }
 async function restoreRoute() {
   const hash = window.location.hash.slice(1)
+  if (hash && !hash.startsWith('/')) return // Native source anchors stay in this document.
   const [path, params = ''] = hash.split('?')
   const [, kind, rawId] = path.split('/')
   const id = rawId ? decodeURIComponent(rawId) : ''
