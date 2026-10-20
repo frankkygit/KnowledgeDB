@@ -84,6 +84,22 @@ md.renderer.rules.image = (tokens: any[], idx: number, _options: any, env: any) 
   return path ? `<img alt="${alt}" data-kb-asset="${md.utils.escapeHtml(path)}" loading="lazy">` : `<span class="image-unavailable">[${alt}：外部图片未加载]</span>`
 }
 
+// Structural IDs are navigation targets; only ingestion IDs identify comment paragraphs.
+md.core.ruler.after('inline', 'kb-structure', (state: any) => {
+  let heading = 0
+  const seen = new Set<string>()
+  for (let i = 0; i < state.tokens.length; i++) {
+    const token = state.tokens[i]
+    if (token.type === 'heading_open') token.attrSet('id', `kb-heading-${++heading}`)
+    if (token.type !== 'kb-anchor') continue
+    const next = state.tokens[i + 1]
+    if (!seen.has(token.content) && next?.type === 'paragraph_open' && next.level === 0) {
+      next.attrSet('data-comment-block', token.content)
+    }
+    seen.add(token.content)
+  }
+})
+
 export function renderMarkdownBody(markdown: string, documentPath: string): string {
   const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
   return md.render(body, { documentPath })

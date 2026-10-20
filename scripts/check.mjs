@@ -28,4 +28,7 @@ if (!gitlink.startsWith(`160000 ${reader.ref} 0\t`)) {
   throw new Error('The docs submodule gitlink must match the published docs commit.')
 }
 
+execFileSync(process.execPath, ['--experimental-transform-types', 'scripts/check-reader.mjs'], { cwd: new URL('../', import.meta.url), stdio: 'inherit' })
+execFileSync(process.execPath, ['--experimental-strip-types', 'scripts/check-markdown.mjs'], { cwd: new URL('../', import.meta.url), stdio: 'inherit' })
+
 console.log(`Repository skeleton check passed (${required.length} required files).`)

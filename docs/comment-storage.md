@@ -1,6 +1,6 @@
 # 评论存储与分片 v1
 
-状态：实施设计，尚无浏览器读写适配器或迁移数据。此约定取代早期“一组讨论一个 JSON 文件”的物理布局；`threadId` 的逻辑含义不变。路径 annotations/ 相对于私有 comments 子库，正文和快照在私有 docs 子库，详见 [多仓库与发布边界](repository-layout.md)。
+状态：已加入首评创建与分片读取适配器，首评创建已通过用户真实私库测试；回复、编辑和重新链接界面待实施。完整实施范围见 [阅读器功能说明](reader-features.md)。当前无迁移数据。此约定取代早期“一组讨论一个 JSON 文件”的物理布局；`threadId` 的逻辑含义不变。路径 annotations/ 相对于私有 comments 子库，正文和快照在私有 docs 子库，详见 [多仓库与发布边界](repository-layout.md)。
 
 ## 1. 两种粒度分开管理
 

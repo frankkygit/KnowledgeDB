@@ -1,5 +1,4 @@
 import { defineConfig } from 'vitepress'
-import { createMarkdownRenderer } from 'vitepress'
 import type { Plugin } from 'vite'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, extname, resolve } from 'node:path'
@@ -12,7 +11,6 @@ function localPrivateDocsPreview(): Plugin {
       if (process.env.KNOWLEDGE_LOCAL_PRIVATE_PREVIEW !== '1') return
 
       const docsRoot = resolve(process.cwd(), 'sources/docs')
-      const renderer = createMarkdownRenderer(resolve(process.cwd(), 'site'), { math: true }, '/')
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url || '/', 'http://localhost')
         if (!url.pathname.startsWith('/__local_docs/')) return next()
@@ -22,8 +20,8 @@ function localPrivateDocsPreview(): Plugin {
         }
 
         try {
-          if (url.pathname === '/__local_docs/catalog') {
-            const data = await readFile(resolve(docsRoot, 'catalog/papers.json'), 'utf8')
+          if (url.pathname === '/__local_docs/catalog' || url.pathname === '/__local_docs/search') {
+            const data = await readFile(resolve(docsRoot, url.pathname.endsWith('/search') ? 'catalog/search.json' : 'catalog/papers.json'), 'utf8')
             res.setHeader('Content-Type', 'application/json; charset=utf-8')
             res.setHeader('Cache-Control', 'no-store')
             return res.end(data)
@@ -43,14 +41,10 @@ function localPrivateDocsPreview(): Plugin {
               return res.end('Document not found')
             }
             const markdown = await readFile(resolve(docsRoot, document.path), 'utf8')
-            const body = markdown
-              .replace(/^---\n[\s\S]*?\n---\n\s*/, '')
-              .replace(/<!-- kb:block [\w-]+ -->/g, '')
-            const paperFolder = basename(dirname(document.path))
-            const html = (await renderer).render(body).replace(/src="(?:\.\/)?assets\//g, `src="/__local_docs/assets/${encodeURIComponent(paperFolder)}/assets/`)
+            const snapshot = JSON.parse(await readFile(resolve(docsRoot, `revisions/${document.documentId}/${document.contentRevision.slice(7)}.json`), 'utf8'))
             res.setHeader('Content-Type', 'application/json; charset=utf-8')
             res.setHeader('Cache-Control', 'no-store')
-            return res.end(JSON.stringify({ ...document, html, searchText: body.replace(/[#>*_`|$]/g, ' ').replace(/\s+/g, ' ') }))
+            return res.end(JSON.stringify({ ...document, markdown, snapshot }))
           }
 
           if (url.pathname.startsWith('/__local_docs/assets/')) {
