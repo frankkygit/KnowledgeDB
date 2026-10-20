@@ -16,7 +16,7 @@ button { cursor: pointer; }
 .status { margin-left: auto; color: #738195; font-size: 13px; }
 .menu-button { display: none; border: 0; background: transparent; color: #31455d; font-size: 20px; }
 .reader-grid { max-width: 1440px; min-height: calc(100vh - 64px); margin: auto; display: grid; grid-template-columns: 292px minmax(0, 1fr); }
-.sidebar { display: flex; flex-direction: column; padding: 24px 18px; background: #fff; border-right: 1px solid #e4e9ef; }
+.sidebar { position: sticky; top: 0; align-self: start; height: 100vh; height: 100dvh; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; padding: 24px 18px; background: #fff; border-right: 1px solid #e4e9ef; }
 .section-tabs, .document-tabs { display: flex; gap: 6px; }
 .section-tabs { padding: 4px; background: #f2f5f8; border-radius: 10px; }
 .section-tabs button, .document-tabs button { border: 0; background: transparent; color: #66768a; border-radius: 7px; padding: 9px 13px; }
@@ -66,7 +66,7 @@ h1 { margin: 0; color: #25394e; font-size: clamp(24px, 3vw, 34px); letter-spacin
   .topbar { height: 58px; padding: 0 16px; }
   .menu-button { display: block; }
   .reader-grid { min-height: calc(100vh - 58px); display: block; }
-  .sidebar { display: none; position: absolute; z-index: 2; inset: 58px auto 0 0; width: min(86vw, 320px); min-height: calc(100vh - 58px); box-shadow: 12px 0 32px #1a2c3c1a; }
+  .sidebar { display: none; position: absolute; z-index: 2; inset: 58px auto 0 0; width: min(86vw, 320px); height: auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; box-shadow: 12px 0 32px #1a2c3c1a; }
   .sidebar.open { display: flex; }
   .content { padding: 32px 20px; }
   .empty-document { margin-top: 8vh; padding: 34px 20px; }
