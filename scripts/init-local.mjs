@@ -3,12 +3,6 @@ import { resolve } from 'node:path'
 
 const directories = [
   'sources/docs',
-  'sources/docs/content/papers',
-  'sources/docs/content/notes',
-  'sources/docs/content/topics',
-  'sources/docs/content/inbox',
-  'sources/docs/catalog',
-  'sources/docs/revisions',
   'sources/comments',
   'sources/comments/annotations',
   'local-data/papers',

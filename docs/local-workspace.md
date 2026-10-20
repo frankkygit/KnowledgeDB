@@ -20,7 +20,7 @@ local-data/
 
 原始翻译不等于正式 translation.md。只有用户要求入库时，才使用项目本地技能将已审阅内容适配到独立的私有 docs 数据根目录，生成正文、稳定 ID、快照和 catalog。私有仓库未配置时停止正式入库并说明缺项，原始成果仍留在 local-data，不能把私人正文写进公开 site 或根 docs 目录。
 
-`sources/docs/` 与 `sources/comments/` 目前仅预留本地目录，并整体忽略，尚未注册真实 Git 子模块。将来提供真实私库地址并挂载时，应先按 `docs/repository-layout.md` 配置和核对现有文件，再有意识地注册子模块；不要使用 git add -f 批量添加私人内容。
+`sources/docs/` 已注册为 KnowledgeDB-docs 私有子模块；新克隆后用 SSH 授权执行 git submodule update --init sources/docs。sources/comments 仍预留且忽略，后续按 docs/repository-layout.md 注册。不要使用 git add -f 批量添加私人内容。
 
 目录存在不等于私库已配置。正式入库前需确认数据根目录是对应独立仓库的真实 Git 根目录；不能因 Git 向上找到主库的 `.git` 就将本地占位目录当作独立私库。
 

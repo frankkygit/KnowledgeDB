@@ -1,0 +1,3 @@
+[submodule "sources/docs"]
+	path = sources/docs
+	url = git@github.com:frankkygit/KnowledgeDB-docs.git

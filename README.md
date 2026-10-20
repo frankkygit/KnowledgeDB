@@ -4,7 +4,7 @@
 
 论文默认先展示技术概述，通过链接在阅读区渲染中文翻译 Markdown；采用左侧列表、右侧内容布局，并支持正文检索。
 
-当前交付为基础目录、可本地运行的阅读器、GitHub Pages 发布流程、方案、模板与入库技能。私库连接、真实内容检索、段落评论读写和线上发布仍待实现；检索与翻译由用户手动触发。
+当前交付为基础目录、可本地运行的阅读器、GitHub Pages 发布流程、方案、模板与入库技能。已接通私有 docs 只读加载、概述/翻译渲染与索引检索；段落评论读写仍待实现；检索与翻译由用户手动触发。
 
 - [论文展示与检索规范](docs/paper-reading.md)：左侧列表、右侧默认概述、翻译 Markdown 链接渲染与全文检索。
 - [知识库构建执行方案](docs/execution-plan.md)：第一版范围、架构、实施顺序和验收用例。
@@ -28,7 +28,7 @@ npm run setup:local
 npm run dev
 ```
 
-构建检查：`npm run check`、`npm run build`。运行环境使用 Node.js 22；未来发布到项目子路径时用 `SITE_BASE=/knowledge_db/ npm run build` 指定路径，个人域名根路径默认使用 `/`。当前为基础阅读器骨架，后续逐步接入私库、全文检索和段落评论；不自动检索或翻译论文，不自动发布网站。
+构建检查：`npm run check`、`npm run build`。运行环境使用 Node.js 22；未来发布到项目子路径时用 `SITE_BASE=/knowledge_db/ npm run build` 指定路径，个人域名根路径默认使用 `/`。当前为基础阅读器骨架，后续逐步接入私库、全文检索和段落评论；不自动检索或翻译论文；main 推送触发 Pages 自动发布。
 
 原始论文与原始翻译统一放在以下位置，整个 `local-data/` 已被 `.gitignore` 排除：
 
@@ -40,7 +40,7 @@ local-data/work/                                    # 解析/OCR 中间结果
 
 这些原始文件不会随 Git 上传；正式入库另写私有 docs 库。目录位置与手动处理规则已写入 [AGENTS.md](AGENTS.md)，详见 [本地工作目录说明](docs/local-workspace.md)。
 
-首次可将 knowledge.config.example.json 复制为 knowledge.config.local.json，配置本地数据路径；不要在配置中保存令牌。sources/docs 与 sources/comments 仅预留，目前没有绑定真实私有仓库。
+首次可将 knowledge.config.example.json 复制为 knowledge.config.local.json，配置本地数据路径；不要在配置中保存令牌。sources/docs 已连接私有 KnowledgeDB-docs 子模块；sources/comments 仍预留。新克隆需 `git submodule update --init sources/docs`，使用已授权的 GitHub SSH 密钥。
 
 ## 本机学术检索技能
 
@@ -132,3 +132,9 @@ codex mcp list
 不配置自动更新。更新前保留安装记录、确认明确上游版本并审阅差异；更新后重新检查依赖、仅 arXiv 参数和实际查询结果，再更新本文状态。
 
 安装方式参考 [上游安装说明](https://github.com/Yuan1z0825/nature-skills#5-安装)、[Codex 技能文档](https://learn.chatgpt.com/docs/build-skills) 与 [MCP 配置文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。
+
+## 线上私库阅读
+
+站点：https://frankkygit.github.io/KnowledgeDB/ 。打开后，在“连接资料库”中填写仅授权 KnowledgeDB-docs、Contents 只读的 fine-grained GitHub 访问令牌。令牌只在标签页内存使用，不要提交 Git 或发到聊天。SSH 配置不代替网页 API 令牌。
+
+连接后默认显示论文概述，点击“翻译”渲染对应 Markdown，支持正文索引检索和图片/公式。当前评论功能尚未接入。更新 docs 后同步 gitlink、release-manifest 和 site/public/reader-config.json 的 commit，再推送主库。

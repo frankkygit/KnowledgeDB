@@ -1,6 +1,6 @@
 # 知识库协作约定
 
-- 本仓库进入基础骨架阶段。阅读器外壳可本地启动；私库授权、全文检索和评论持久化以实际代码状态为准。实现遵循 `docs/execution-plan.md` 和 `docs/data-contract.md`，不要把设计示例当成已实现功能。
+- 本仓库进入基础骨架阶段。阅读器外壳可本地启动；已接入 docs 私库的只读授权、概述/翻译渲染和正文索引检索；评论持久化仍待实现。实现遵循 `docs/execution-plan.md` 和 `docs/data-contract.md`，不要把设计示例当成已实现功能。
 - 线上架构统一为 GitHub Pages 公开阅读器 + 浏览器令牌直连私有 docs/comments 库，遵循 `docs/browser-github-access.md`。不引入额外业务托管、不新增自建 session 或 /api 接口；Pages 产物不包含私人正文、标题目录、索引、附件或评论。
 - 仓库拆分遵循 `docs/repository-layout.md`：站点代码在主库，正文和快照在私有 docs 子库，评论在私有 comments 子库。入库技能中的 content/、revisions/、annotations/ 是各自数据仓库内的逻辑路径；先解析数据根目录再写入，不在站点主库复制私人内容。
 - 论文展示遵循 `docs/paper-reading.md`：左侧列表、右侧内容，默认加载 analysis.md 概述；translation.md 通过稳定文档 ID 链接在阅读器内渲染。索引必须覆盖概述、翻译与笔记正文，搜索结果定位实际命中文档。
@@ -20,7 +20,8 @@
 - OCR、抽取与临时处理文件保存至 `local-data/work/`。首次可运行 `npm run setup:local` 创建本地目录；这些空目录不随 Git 克隆保留。
 - 检索、下载、翻译仅由用户手动触发；开发、构建及 CI 不自动执行这些流程。搜索候选默认只在对话中展示。
 - 原始翻译是本地工作成果；只有用户明确要求入库时，才经本地入库技能整理到已配置的私有 docs 数据根。若私库未配置，保留本地成果并报告缺项，不写入公开站点或根 docs 设计目录。
-- `sources/docs/` 和 `sources/comments/` 当前是被忽略的本地预留目录，尚未注册真实子模块。不得通过强制添加普通目录来把私有正文或评论提交到主库。
+- `sources/docs/` 已注册为私有 `frankkygit/KnowledgeDB-docs` 子模块；主库只跟踪 gitlink，不跟踪其中正文。`sources/comments/` 仍是被忽略的预留目录。不得强制添加普通私有数据文件到主库。
+- 正文发布先提交并推送 docs 子库，再更新主库 gitlink、release-manifest.json 与 site/public/reader-config.json 中的固定 docs commit 后推送主库。三个引用必须一致，公开 reader-config 只含仓库、commit 与索引路径，不含正文或令牌。
 - 目录详见 `docs/local-workspace.md`。不修改本机外部 nature 技能源码来写死此项目路径；调用时传入本项目输出目录。
 
 ## 本机学术检索：仅 arXiv
