@@ -4,6 +4,7 @@
 
 | 路径 | 用途 | 状态 |
 | --- | --- | --- |
+| `local/kb-arxiv-latex-translate/SKILL.md` | arXiv 原 PDF/源码下载、nature-reader 中文阅读版及入库交接 | 已创建编排规范；不编译 LaTeX，真实论文端到端待验证 |
 | `local/kb-paper-ingest/SKILL.md` | PDF 元信息、默认概述、翻译入口与全文索引 | 已创建；应用和校验脚本待实施 |
 | `local/kb-note-ingest/SKILL.md` | 网页资料与个人总结入库 | 已创建；应用和校验脚本待实施 |
 | `local/kb-content-update/SKILL.md` | 重译、重整与评论影响报告 | 已创建；应用和校验脚本待实施 |
@@ -26,3 +27,6 @@
 5. 更新固定到明确版本，检查输出差异、文档/段落 ID 保留和评论影响，再替换注册记录。不自动拉取浮动最新版。
 
 推荐调用示例：读取 `skills/local/kb-paper-ingest/SKILL.md`，将指定 PDF 生成为论文翻译与解读草稿；仅修改本地仓库，返回来源、待核对项和评论影响，不自动发布。
+
+
+源码辅助示例：读取 `skills/local/kb-arxiv-latex-translate/SKILL.md`，从我提供的 arXiv 链接下载同版本 PDF 和源码，用 LaTeX 正文/公式/原图辅助 nature-reader 生成中文 Markdown，不编译 LaTeX。仅本地时明确写“暂不入库或发布”；否则按默认流程继续。技能在本仓库维护，通过 AGENTS.md 和明确路径调用，不代表已安装到全局技能目录。

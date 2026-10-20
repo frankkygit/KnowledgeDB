@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "skills": [
     {
+      "name": "kb-arxiv-latex-translate",
+      "path": "skills/local/kb-arxiv-latex-translate/SKILL.md",
+      "kind": "local",
+      "version": "0.1.2",
+      "source": "project-authored",
+      "license": "project-internal-no-external-license-declared",
+      "purpose": "arXiv 同版本 PDF/源码下载、nature-reader 中文 Markdown 阅读版与入库发布交接（不编译 LaTeX）"
+    },
+    {
       "name": "kb-paper-ingest",
       "path": "skills/local/kb-paper-ingest/SKILL.md",
       "kind": "local",

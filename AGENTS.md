@@ -10,16 +10,18 @@
 - 评论逻辑上以 threadId 分组，物理上遵循 `docs/comment-storage.md`，按年/月/日/文档存操作分片；不是一条评论或一组讨论一个文件。不得把读取时聚合出的讨论对象反向覆盖正式记录。
 - 文本变更后的旧评论不能仅凭相似文字或相同段落 ID 自动迁移。保留原引用与版本，转入页底待重新链接列表；由库主人确认新段落。
 - 入库工作使用 `skills/local/` 中对应技能；第三方技能遵循 `skills/README.md` 的登记与更新规则。仓库内技能不等于已安装到 Agent 的自动发现目录。
+- 默认论文翻译流程：用户提供论文并要求翻译时，除非明确限定仅翻译、暂不入库或不发布，否则完成原件与翻译原始产物本地归档，使用 skills/local/kb-paper-ingest/SKILL.md 或 kb-content-update 整理私有 docs、同步版本引用并按 docs/deployment.md 发布和核验线上论文显示。普通论文优先使用可用的 nature-reader；不要假设其他上传技能存在。不得把本地构建、推送成功或预计网址称为线上部署完成。
+- arXiv 链接翻译优先使用 `skills/local/kb-arxiv-latex-translate/SKILL.md`：固定来源版本，从链接下载同版本原 PDF 和 LaTeX 源码，用源码正文/公式/原图辅助 nature-reader 生成中文 Markdown 阅读版；不编译 LaTeX、不生成中文 TeX 或 PDF。明确仅翻译时止于本地，否则使用本地入库/更新技能并按 docs/deployment.md 完成发布，不重复翻译。源码不可用时报告，未经用户接受不静默降级。
 - Agent 收集内容先标为 draft；文献事实、Agent 分析和个人判断必须区分，来源不明或解析不清处写明待核对。
 - Git 版本可记录评论历史，但不替代独立备份。令牌仅在标签页内存使用，不写持久存储、构建产物或日志；原始私有 PDF 默认留本地。
 
 ## 本地原始论文与原始翻译（必须遵循）
 
 - 原始资料根目录固定为仓库相对路径 `local-data/`；当前绝对路径是 `/Users/lyll/code/knowledge_db/local-data/`。整个目录由 `.gitignore` 忽略，不提交或发布。
-- 用户要求下载论文时，保存至 `local-data/papers/<paper-id>/<source-version>/`；用户要求翻译时，原始生成物保存至 `local-data/translations/<paper-id>/<run-id>/`，保留 paper.md、source_map.json、translation_notes.md 及 assets（实际生成哪些就保留哪些）。不要覆盖已有下载或翻译运行目录。
+- 用户要求下载论文时，保存至 `local-data/papers/<paper-id>/<source-version>/`；默认论文翻译流程也将原始生成物保存至 `local-data/translations/<paper-id>/<run-id>/`，保留 paper.md、source_map.json、translation_notes.md 及 assets（实际生成哪些就保留哪些）。不要覆盖已有下载或翻译运行目录。
 - OCR、抽取与临时处理文件保存至 `local-data/work/`。首次可运行 `npm run setup:local` 创建本地目录；这些空目录不随 Git 克隆保留。
 - 检索、下载、翻译仅由用户手动触发；开发、构建及 CI 不自动执行这些流程。搜索候选默认只在对话中展示。
-- 原始翻译是本地工作成果；只有用户明确要求入库时，才经本地入库技能整理到已配置的私有 docs 数据根。若私库未配置，保留本地成果并报告缺项，不写入公开站点或根 docs 设计目录。
+- 原始翻译先作为本地工作成果保存；默认流程随后经本地入库技能整理到已配置的私有 docs 数据根，完成发布。用户明确要求仅保留本地翻译或暂不入库/发布时，才停在所指定节点。若私库、凭据或发布条件未配置，保留本地成果并报告具体缺项，不写入公开站点或根 docs 设计目录。
 - `sources/docs/` 已注册为私有 `frankkygit/KnowledgeDB-docs` 子模块；主库只跟踪 gitlink，不跟踪其中正文。`sources/comments/` 仍是被忽略的预留目录。不得强制添加普通私有数据文件到主库。
 - 正文发布先提交并推送 docs 子库，再更新主库 gitlink、release-manifest.json 与 site/public/reader-config.json 中的固定 docs commit 后推送主库。三个引用必须一致，公开 reader-config 只含仓库、commit 与索引路径，不含正文或令牌。
 - 目录详见 `docs/local-workspace.md`。不修改本机外部 nature 技能源码来写死此项目路径；调用时传入本项目输出目录。
