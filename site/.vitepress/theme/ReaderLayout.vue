@@ -27,14 +27,57 @@ const loadStatus = ref('尚未连接资料库')
 const renderedHtml = ref('')
 const article = ref<HTMLElement | null>(null)
 const headings = ref<{ id: string; title: string; level: number }[]>([])
+const activeHeadingId = ref('')
+const outlineOpen = ref(false)
+const outlineRoot = ref<HTMLElement | null>(null)
+let headingObserver: ResizeObserver | null = null
+let headingFrame = 0
 const cacheStatus = ref('')
 const commentsBusy = ref(false)
 const htmlCache = new RenderCache()
 function goTop() { article.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 function jumpHeading(id: string) {
+  closeOutline()
   const target = article.value?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
-  document.querySelector<HTMLDetailsElement>('.page-outline')?.removeAttribute('open')
   target?.scrollIntoView({ behavior: 'smooth', block: 'start' }); target?.focus({ preventScroll: true })
+}
+function updateActiveHeading() {
+  headingFrame = 0
+  const elements = headings.value.map(item => article.value?.querySelector<HTMLElement>(`#${CSS.escape(item.id)}`)).filter((item): item is HTMLElement => Boolean(item))
+  if (!elements.length) { activeHeadingId.value = ''; return }
+  const threshold = 150
+  let active = elements[0]
+  for (const heading of elements) {
+    if (heading.getBoundingClientRect().top <= threshold) active = heading
+    else break
+  }
+  activeHeadingId.value = active.id
+}
+function scheduleActiveHeading() {
+  if (!headingFrame) headingFrame = requestAnimationFrame(updateActiveHeading)
+}
+function observeArticleLayout() {
+  headingObserver?.disconnect()
+  headingObserver = null
+  if (typeof ResizeObserver !== 'undefined' && article.value) {
+    headingObserver = new ResizeObserver(scheduleActiveHeading)
+    headingObserver.observe(article.value)
+  }
+  scheduleActiveHeading()
+}
+function resetHeadingState() {
+  headings.value = []; activeHeadingId.value = ''; outlineOpen.value = false
+  headingObserver?.disconnect(); headingObserver = null
+  if (headingFrame) cancelAnimationFrame(headingFrame)
+  headingFrame = 0
+}
+function closeOutline() {
+  outlineOpen.value = false
+  if (outlineRoot.value?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
+}
+function toggleOutline(event: MouseEvent) {
+  outlineOpen.value = !outlineOpen.value
+  if (!outlineOpen.value) (event.currentTarget as HTMLElement).blur()
 }
 async function clearHtmlCache() { await htmlCache.clear(); cacheStatus.value = '已清除 HTML 缓存' }
 async function loadSnapshot(doc: any) {
@@ -72,7 +115,7 @@ function disconnect(purgeCache = true) {
   generation++; documentGeneration++
   client?.disconnect(); client = null; localMode = false
   if (purgeCache) void htmlCache.clear(); else htmlCache.forget()
-  headings.value = []; cacheStatus.value = ''
+  resetHeadingState(); cacheStatus.value = ''
   clearImages(); tokenInput.value = ''; papers.value = []; searchItems.value = []
   renderedHtml.value = ''; selectedPaperId.value = ''; query.value = ''
   connected.value = false; connecting.value = false; loadingDocument.value = false
@@ -95,7 +138,7 @@ function normalizeCatalog(catalog: any) {
 async function showDocument(blockId = '') {
   const current = ++documentGeneration
   const session = generation
-  clearImages(); renderedHtml.value = ''; headings.value = []; cacheStatus.value = ''; error.value = ''
+  clearImages(); renderedHtml.value = ''; resetHeadingState(); cacheStatus.value = ''; error.value = ''
   loadingDocument.value = false
   const doc = activeDoc.value
   if (!doc) return
@@ -132,6 +175,8 @@ async function showDocument(blockId = '') {
       heading.tabIndex = -1
       return { id: heading.id, title: heading.textContent || '', level: Number(heading.tagName.slice(1)) }
     })
+    observeArticleLayout()
+    article.value?.addEventListener('load', scheduleActiveHeading, true)
     if (blockId) document.getElementById(`block-${blockId}`)?.scrollIntoView({ block: 'start' })
     else window.scrollTo({ top: 0 })
     loadingDocument.value = false
@@ -168,7 +213,7 @@ async function showDocument(blockId = '') {
 
 async function selectSection(id: string) {
   if (commentsBusy.value) return
-  activeSection.value = id; documentGeneration++; headings.value = []; clearImages(); renderedHtml.value = ''; loadingDocument.value = false
+  activeSection.value = id; documentGeneration++; resetHeadingState(); clearImages(); renderedHtml.value = ''; loadingDocument.value = false
   if (id === 'papers' && selectedPaper.value) await showDocument()
 }
 async function openPaper(paper: any) {
@@ -238,8 +283,12 @@ async function connectWithToken() {
 }
 
 onMounted(async () => {
+  window.addEventListener('scroll', scheduleActiveHeading, { passive: true })
+  window.addEventListener('resize', scheduleActiveHeading, { passive: true })
   window.addEventListener('pagehide', leavePage)
   window.addEventListener('hashchange', restoreRoute)
+  document.addEventListener('pointerdown', closeOutlineOutside)
+  document.addEventListener('keydown', closeOutlineOnEscape)
   try {
     const result = await fetch(withBase('/reader-config.json'), { cache: 'no-store' })
     if (!result.ok) throw new Error()
@@ -258,7 +307,9 @@ onMounted(async () => {
   }
 })
 function leavePage() { disconnect(false) }
-onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); window.removeEventListener('hashchange', restoreRoute); disconnect(false) })
+function closeOutlineOutside(event: PointerEvent) { if (!outlineRoot.value?.contains(event.target as Node)) closeOutline() }
+function closeOutlineOnEscape(event: KeyboardEvent) { if (event.key === 'Escape') closeOutline() }
+onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); window.removeEventListener('hashchange', restoreRoute); window.removeEventListener('scroll', scheduleActiveHeading); window.removeEventListener('resize', scheduleActiveHeading); document.removeEventListener('pointerdown', closeOutlineOutside); document.removeEventListener('keydown', closeOutlineOnEscape); article.value?.removeEventListener('load', scheduleActiveHeading, true); resetHeadingState(); disconnect(false) })
 </script>
 
 <template>
@@ -308,11 +359,14 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
           <nav v-if="selectedPaper" class="document-tabs" aria-label="文档类型"><button v-for="doc in documentTypes" :key="doc.id" :class="{ active: activeDocument === doc.id }" :disabled="commentsBusy || !selectedPaper.documents.some((d: any) => d.type === doc.id)" @click="openType(doc.id)">{{ doc.label }}</button></nav>
           <p v-if="loadingDocument" role="status">正在加载文档…</p>
           <div v-if="renderedHtml" class="reading-tools">
-            <details v-if="headings.length" class="page-outline"><summary>本页目录 · {{ headings.length }} 个标题</summary><nav aria-label="本页标题"><button v-for="heading in headings" :key="heading.id" :aria-label="heading.title" :style="{ paddingLeft: `${12 + (heading.level - 1) * 14}px` }" @click="jumpHeading(heading.id)">{{ heading.title }}</button></nav></details>
             <button type="button" @click="goTop">返回文首</button>
             <span class="hint" role="status">{{ cacheStatus }}</span><button type="button" @click="clearHtmlCache">清除 HTML 缓存</button>
           </div>
           <article v-if="renderedHtml" ref="article" class="document-body" @click="articleLink" v-html="renderedHtml" />
+          <nav v-if="renderedHtml && headings.length" ref="outlineRoot" class="floating-outline" :class="{ 'is-open': outlineOpen }" aria-label="本页章节目录">
+            <button type="button" class="outline-toggle" :aria-expanded="outlineOpen" :aria-label="outlineOpen ? '收起目录' : '展开目录'" @click="toggleOutline">{{ outlineOpen ? '收起目录' : '☰' }}</button>
+            <button v-for="heading in headings" :key="heading.id" type="button" class="outline-item" :class="{ active: activeHeadingId === heading.id }" :aria-current="activeHeadingId === heading.id ? 'location' : undefined" :aria-label="heading.title" :title="heading.title" :style="{ '--outline-level': heading.level }" @click="jumpHeading(heading.id)"><span class="outline-mark" aria-hidden="true"></span><span class="outline-title">{{ heading.title }}</span></button>
+          </nav>
           <ReaderComments v-if="activeDoc" :doc="activeDoc" :article="article" :docs-commit="config?.ref || ''" :load-snapshot="loadSnapshot" :local-mode="localMode" @busy="commentsBusy = $event" />
           <button v-if="renderedHtml" class="back-to-top" type="button" aria-label="返回文档首行" @click="goTop">↑ 返回文首</button>
           <section v-if="!renderedHtml && !loadingDocument" class="empty-document"><h2>暂无可展示内容</h2><p>当前分类或文档尚未整理。</p></section>

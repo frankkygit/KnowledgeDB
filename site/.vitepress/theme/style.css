@@ -94,11 +94,18 @@ button:disabled { cursor: default; opacity: .55; }
 
 .reading-tools { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 0; background: #f5f7faf5; border-bottom: 1px solid #dfe5eb; }
 .reading-tools button, .comments-panel button, .paragraph-comment, .quote-comment, .back-to-top { border: 1px solid #c8d6e3; border-radius: 7px; padding: 8px 12px; background: #fff; color: #285578; }
-.page-outline { position: relative; max-width: 100%; }
-.page-outline summary { cursor: pointer; padding: 8px; color: #285578; }
-.page-outline nav { position: absolute; top: 100%; width: min(520px, 75vw); max-height: 55vh; overflow: auto; background: #fff; border: 1px solid #dce5ed; border-radius: 8px; box-shadow: 0 8px 24px #20305018; padding: 8px; }
-.page-outline nav button { display: block; text-align: left; width: 100%; border: 0; line-height: 1.5; }
-.page-outline nav button:hover { background: #eef5fa; }
+.floating-outline { position: fixed; z-index: 8; top: 50%; right: 10px; transform: translateY(-50%); display: grid; gap: 5px; width: 30px; max-height: min(76vh, 720px); overflow-x: hidden; overflow-y: auto; padding: 8px 3px; border-radius: 10px; scrollbar-width: thin; transition: width .18s ease, padding .18s ease, background-color .18s ease; }
+.floating-outline:hover, .floating-outline:focus-within { width: min(300px, calc(100vw - 32px)); padding: 8px; background: #f8fafbc4; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.outline-item { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; width: 100%; min-height: 22px; padding: 2px 4px; border: 0; border-radius: 5px; background: transparent; color: #a8b2bd; text-align: left; }
+.outline-item:hover, .outline-item:focus-visible, .outline-item.active { color: #40566c; }
+.floating-outline:hover .outline-item:hover, .floating-outline:focus-within .outline-item:focus-visible, .floating-outline:focus-within .outline-item.active { background: #e9eef270; }
+.outline-item:focus-visible { outline: 2px solid #7898b6; outline-offset: 1px; }
+.outline-mark { flex: 0 0 12px; width: 12px; height: 2px; border-radius: 2px; background: currentColor; transition: width .15s ease, flex-basis .15s ease, background-color .15s ease; }
+.outline-item.active .outline-mark { flex-basis: 19px; width: 19px; height: 3px; color: #4d6882; }
+.outline-title { min-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 1.5; transition: opacity .12s ease; }
+.floating-outline:hover .outline-title, .floating-outline:focus-within .outline-title { opacity: 1; }
+.outline-item.active .outline-title, .outline-item:hover .outline-title { color: #263e55; }
+.outline-toggle { display: none; }
 .document-body, .document-body :is(h1,h2,h3,h4,h5,h6), .document-body .block-anchor { scroll-margin-top: 130px; }
 .document-body p[data-comment-block] { position: relative; }
 .document-body p[data-comment-block]:hover { background: #edf4fa80; }
@@ -121,5 +128,15 @@ button:disabled { cursor: default; opacity: .55; }
   .reading-tools .hint { flex-basis: 100%; }
   .quote-comment { bottom: 78px; width: 85vw; max-width: 85vw; }
   .back-to-top { right: 16px; bottom: 16px; }
+  .floating-outline { right: 4px; width: 26px; }
+  .floating-outline:hover, .floating-outline:focus-within { width: min(260px, calc(100vw - 24px)); }
+}
+@media (hover: none), (pointer: coarse) {
+  .outline-toggle { display: block; flex: 0 0 auto; width: 100%; padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: #53697f; text-align: left; font-size: 12px; }
+  .floating-outline:not(.is-open):not(:focus-within) .outline-toggle { width: 24px; padding: 5px 0; text-align: center; }
+  .floating-outline:hover { width: 30px; padding: 8px 3px; background: transparent; }
+  .floating-outline:hover .outline-title { opacity: 0; }
+  .floating-outline:focus-within, .floating-outline.is-open { width: min(300px, calc(100vw - 32px)); padding: 8px; background: #f8fafbc4; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  .floating-outline:focus-within .outline-title, .floating-outline.is-open .outline-title { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
