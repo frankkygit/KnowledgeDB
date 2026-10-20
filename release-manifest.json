@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "docsCommit": "14c11ff5e740f5c227a9320a91375b740f0b2e57",
+  "docsCommit": "a19a5eef77385fdc8bfd640d2430a7e81d58dd51",
   "commentsCommit": null,
-  "publishedAt": null,
+  "publishedAt": "2026-10-20T11:40:36.569274+00:00",
   "note": "Public reader only. Private docs are fetched in the browser after explicit GitHub authentication.",
   "docsRepository": "frankkygit/KnowledgeDB-docs"
 }
