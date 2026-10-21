@@ -11,6 +11,18 @@ type Note = NoteRecord
 const notes = ref<Note[]>([])
 const head = ref('')
 const selectedId = ref('')
+const multiSelect = ref(false)
+const selectedForDeletion = ref<string[]>([])
+const rowMenuId = ref('')
+const deleteDialog = ref(false)
+const deleteBusy = ref(false)
+const deleteHead = ref('')
+const deleteIds = ref<string[]>([])
+const pendingDelete = ref<{ signature: string; id: string } | null>(null)
+const deleteReturnFocus = ref<HTMLElement | null>(null)
+const deleteDialogRoot = ref<HTMLElement | null>(null)
+const discardDialogRoot = ref<HTMLElement | null>(null)
+const selectAllCheckbox = ref<HTMLInputElement | null>(null)
 const selected = ref<Note | null>(null)
 const markdown = ref('')
 const busy = ref(false)
@@ -50,6 +62,7 @@ const noteSidebarCollapsed = computed(() => props.sidebarCollapsed)
 const isLocalStore = computed(() => props.store.kind === 'local-demo')
 const isDraggingImage = ref(false)
 let editSession = 0
+let loadSession = 0
 let lastSelection = { start: 0, end: 0, scrollTop: 0 }
 let imageInsertionTail = Promise.resolve()
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -62,6 +75,7 @@ const editBaseline = ref('')
 const pendingRequest = ref<{ signature: string; id: string } | null>(null)
 const dirty = computed(() => editing.value && `${title.value}\n${tagsText.value}\n${status.value}\n${editMarkdown.value}` !== editBaseline.value)
 let pendingDiscardAction: (() => void) | null = null
+let deleteAfterDiscard = false
 let pendingLeaveResolve: ((leave: boolean) => void) | null = null
 const preview = computed(() => renderMarkdown(editMarkdown.value, selected.value?.path || 'content/notes/new/index.md'))
 const baseFilteredNotes = computed(() => notes.value.filter(note =>
@@ -94,12 +108,132 @@ async function openNote(id: string, discardConfirmed = false) {
   void clearActiveDraft()
   editing.value = false; creating.value = false; previewMode.value = false
   selectedId.value = id
+  const session = ++loadSession
   const data = await props.store.get(id)
+  if (session !== loadSession || selectedId.value !== id) return
   selected.value = data.note
   markdown.value = data.markdown
   head.value = data.head
   editing.value = false; creating.value = false
 }
+function toggleMultiSelect() {
+  multiSelect.value = !multiSelect.value
+  rowMenuId.value = ''
+  if (!multiSelect.value) selectedForDeletion.value = []
+}
+function toggleDeleteSelection(id: string) {
+  selectedForDeletion.value = selectedForDeletion.value.includes(id) ? selectedForDeletion.value.filter(item => item !== id) : [...selectedForDeletion.value, id]
+}
+function selectAllVisible() {
+  const ids = visible.value.map(note => note.documentId)
+  const selected = new Set(selectedForDeletion.value)
+  selectedForDeletion.value = [...selected, ...ids.filter(id => !selected.has(id))]
+}
+function toggleVisibleSelection() {
+  const ids = visible.value.map(note => note.documentId)
+  const selected = new Set(selectedForDeletion.value)
+  const allSelected = ids.length > 0 && ids.every(id => selected.has(id))
+  selectedForDeletion.value = allSelected ? selectedForDeletion.value.filter(id => !ids.includes(id)) : [...selected, ...ids.filter(id => !selected.has(id))]
+}
+function openDeleteDialog(ids: string[], trigger?: HTMLElement) {
+  error.value = ''
+  deleteIds.value = [...ids]
+  deleteHead.value = head.value
+  const signature = JSON.stringify({ ids: [...ids].sort(), head: head.value })
+  if (!pendingDelete.value || pendingDelete.value.signature !== signature) pendingDelete.value = { signature, id: crypto.randomUUID() }
+  deleteReturnFocus.value = trigger || document.activeElement as HTMLElement
+  rowMenuId.value = ''
+  deleteDialog.value = true
+  nextTick(() => deleteDialogRoot.value?.querySelector<HTMLButtonElement>('button')?.focus())
+}
+function restoreDeleteFocus() {
+  const trigger = deleteReturnFocus.value
+  if (trigger?.isConnected) trigger.focus()
+  else document.querySelector<HTMLButtonElement>('.note-list-heading button')?.focus()
+}
+function requestDelete(ids: string[], trigger?: HTMLElement) {
+  if (dirty.value && ids.includes(editorSourceDocumentId.value || '')) {
+    deleteAfterDiscard = true
+    const scope = JSON.stringify({ filters: [sourceFilter.value, statusFilter.value, tagFilter.value, search.value], visible: visible.value.map(note => note.documentId).sort() })
+    requestDiscard(() => {
+      const currentScope = JSON.stringify({ filters: [sourceFilter.value, statusFilter.value, tagFilter.value, search.value], visible: visible.value.map(note => note.documentId).sort() })
+      if (scope !== currentScope || ids.some(id => !visible.value.some(note => note.documentId === id))) {
+        selectedForDeletion.value = []
+        error.value = '筛选结果已变化，请重新选择要删除的笔记。'
+        return
+      }
+      openDeleteDialog(ids, trigger)
+    })
+    return
+  }
+  openDeleteDialog(ids, trigger)
+}
+async function deleteSelectedNotes() {
+  if (deleteBusy.value || !deleteIds.value.length) return
+  deleteBusy.value = true; busy.value = true; error.value = ''; message.value = ''
+  const ids = [...deleteIds.value]
+  const signature = JSON.stringify({ ids: [...ids].sort(), head: deleteHead.value })
+  if (!pendingDelete.value || pendingDelete.value.signature !== signature) pendingDelete.value = { signature, id: crypto.randomUUID() }
+  try {
+    const result = await props.store.deleteNotes(ids, deleteHead.value, pendingDelete.value.id)
+    loadSession++
+    if (ids.includes(editorSourceDocumentId.value || '') && editing.value) {
+      await clearActiveDraft()
+      editSession++
+      editing.value = false; creating.value = false; previewMode.value = false
+      selected.value = null; selectedId.value = ''
+      markdown.value = ''; editMarkdown.value = ''; pendingAssets.value = []; pendingRequest.value = null
+    }
+    const currentWasDeleted = ids.includes(selectedId.value)
+    selectedForDeletion.value = selectedForDeletion.value.filter(id => !ids.includes(id))
+    deleteDialog.value = false; deleteIds.value = []
+    multiSelect.value = selectedForDeletion.value.length > 0
+    rowMenuId.value = ''
+    pendingDelete.value = null
+    notes.value = notes.value.filter(note => !ids.includes(note.documentId)); head.value = result.head
+    if (currentWasDeleted) { selected.value = null; selectedId.value = ''; markdown.value = '' }
+    message.value = `${ids.length} 篇笔记已删除；Git 历史版本已保留。`
+    try {
+      const latest = await props.store.list()
+      notes.value = latest.notes; head.value = latest.head
+    } catch (cause) { error.value = `笔记已删除，但列表刷新失败：${cause instanceof Error ? cause.message : '请稍后刷新。'}` }
+    nextTick(restoreDeleteFocus)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '删除失败；笔记与选择仍保留。'
+  } finally { busy.value = false; deleteBusy.value = false }
+}
+function handleDeleteKeydown(event: KeyboardEvent) {
+  if (!deleteDialog.value) return
+  if (event.key === 'Escape' && !deleteBusy.value) { deleteDialog.value = false; nextTick(restoreDeleteFocus); return }
+  if (event.key !== 'Tab') return
+  const controls = [...(deleteDialogRoot.value?.querySelectorAll<HTMLElement>('button:not([disabled])') || [])]
+  if (!controls.length) return
+  if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus() }
+  else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0].focus() }
+}
+function handleDiscardKeydown(event: KeyboardEvent) {
+  if (!discardPrompt.value) return
+  if (event.key === 'Escape') { event.preventDefault(); keepEditing(); return }
+  if (event.key !== 'Tab') return
+  const controls = [...(discardDialogRoot.value?.querySelectorAll<HTMLElement>('button:not([disabled])') || [])]
+  if (!controls.length) return
+  if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus() }
+  else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0].focus() }
+}
+watch(visible, current => {
+  const ids = new Set(current.map(note => note.documentId))
+  selectedForDeletion.value = selectedForDeletion.value.filter(id => ids.has(id))
+  if (rowMenuId.value && !ids.has(rowMenuId.value)) rowMenuId.value = ''
+}, { deep: true })
+watch([sourceFilter, statusFilter, tagFilter, search], () => {
+  selectedForDeletion.value = []
+  if (deleteDialog.value) { deleteDialog.value = false; deleteIds.value = [] }
+  if (deleteAfterDiscard) { deleteAfterDiscard = false; discardPrompt.value = false; pendingDiscardAction = null; error.value = '筛选结果已变化，请重新选择要删除的笔记。' }
+  rowMenuId.value = ''
+})
+watch([selectedForDeletion, visible], () => nextTick(() => {
+  if (selectAllCheckbox.value) selectAllCheckbox.value.indeterminate = visible.value.some(note => selectedForDeletion.value.includes(note.documentId)) && !visible.value.every(note => selectedForDeletion.value.includes(note.documentId))
+}), { flush: 'post' })
 function beginEdit(create = false, discardConfirmed = false) {
   if (dirty.value && !discardConfirmed) { requestDiscard(() => beginEdit(create, true)); return }
   if (editing.value) void clearActiveDraft()
@@ -119,14 +253,17 @@ function cancelEdit(discardConfirmed = false) {
   void clearActiveDraft()
   editing.value = false; creating.value = false; previewMode.value = false; editSession++
 }
-function requestDiscard(action: () => void) { pendingDiscardAction = action; discardPrompt.value = true }
+function requestDiscard(action: () => void) { pendingDiscardAction = action; discardPrompt.value = true; nextTick(() => discardDialogRoot.value?.querySelector<HTMLButtonElement>('button')?.focus()) }
 function keepEditing() {
-  discardPrompt.value = false; pendingDiscardAction = null
+  discardPrompt.value = false; pendingDiscardAction = null; deleteAfterDiscard = false
   const resolve = pendingLeaveResolve; pendingLeaveResolve = null; resolve?.(false)
+  if (editing.value) nextTick(() => editor.value?.focus())
 }
 function discardEdits() {
   discardPrompt.value = false
-  void clearActiveDraft()
+  const preserveForDelete = deleteAfterDiscard
+  deleteAfterDiscard = false
+  if (!preserveForDelete) void clearActiveDraft()
   const action = pendingDiscardAction; pendingDiscardAction = null
   const resolve = pendingLeaveResolve; pendingLeaveResolve = null
   action?.(); resolve?.(true)
@@ -439,19 +576,22 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
   <section class="offline-notes" :class="{ 'notes-sidebar-collapsed': noteSidebarCollapsed }">
     <aside class="notes-sidebar" :aria-hidden="noteSidebarCollapsed">
       <nav class="section-tabs note-section-tabs" aria-label="内容分类"><button type="button" :disabled="busy" @click="emit('select-section', 'papers')">论文</button><button type="button" class="active" aria-current="page">笔记</button><button type="button" :disabled="busy" @click="emit('select-section', 'topics')">专题</button></nav>
-      <label class="notes-search"><span>搜索笔记</span><div class="notes-search-field"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input v-model="search" type="search" placeholder="搜索标题与正文" /></div></label>
+      <label class="notes-search"><span>搜索笔记</span><div class="notes-search-field"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input v-model="search" type="search" placeholder="搜索标题与正文" :disabled="busy || deleteDialog" /></div></label>
       <button type="button" class="new-note-button" title="新建笔记" :disabled="busy || !draftScopeReady" @click="beginEdit(true)"><span aria-hidden="true">＋</span> 新建笔记</button>
-      <div class="note-filter-group"><span>来源</span><div><button v-for="item in [{ id: 'all', label: '全部' }, { id: 'blog', label: 'Blog' }, { id: 'personal', label: '个人' }]" :key="item.id" type="button" :class="{ active: sourceFilter === item.id }" @click="sourceFilter = item.id">{{ item.label }}</button></div></div>
-      <div class="note-filter-group"><span>状态</span><div><button v-for="item in [{ id: 'published', label: '正式' }, { id: 'draft', label: '草稿' }, { id: 'all', label: '全部' }]" :key="item.id" type="button" :class="{ active: statusFilter === item.id }" @click="statusFilter = item.id">{{ item.label }}</button></div></div>
-      <div class="note-filter-group tag-filters"><div class="tag-header"><span>标签（任意匹配）</span><button v-if="allTags.length > 6" type="button" class="tag-expand-button" :aria-label="tagsExpanded ? '收起标签' : '展开全部标签'" :aria-expanded="tagsExpanded" :title="tagsExpanded ? '收起标签' : '展开全部标签'" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '收起' : '展开' }} <svg viewBox="0 0 16 16" :class="{ rotated: tagsExpanded }"><path d="m4 6 4 4 4-4" /></svg></button></div><div class="tag-chips" :class="{ 'is-expanded': tagsExpanded }"><button v-for="tag in shownTags" :key="tag" type="button" :title="`当前来源、状态和搜索结果中有 ${tagCounts.find(([name]) => name === tag)?.[1] || 0} 篇笔记使用此标签；同一篇只计一次`" :class="{ active: tagFilter.includes(tag) }" @click="toggleTag(tag)">{{ tag }} <small>({{ tagCounts.find(([name]) => name === tag)?.[1] || 0 }})</small></button><small v-if="!allTags.length">暂无标签</small></div><small v-if="allTags.length" class="tag-count-hint">计数按当前来源、状态和搜索统计，不受标签筛选影响；已选多个标签时匹配任意一个</small></div>
-      <nav class="note-list" aria-label="笔记列表"><button v-for="note in visible" :key="note.documentId" type="button" :disabled="busy" :title="note.title" :class="{ selected: selectedId === note.documentId }" @click="openNote(note.documentId)"><strong>{{ note.title }}</strong><small>{{ note.sourceKind === 'blog' ? 'Blog' : '个人' }} · {{ note.tags.slice(0, 2).join(' · ') || (note.status === 'draft' ? '草稿' : '正式') }}</small><time>{{ date(note.updated) }}</time></button><p v-if="!visible.length" class="hint">没有匹配的笔记。</p></nav>
+      <div class="note-filter-group"><span>来源</span><div><button v-for="item in [{ id: 'all', label: '全部' }, { id: 'blog', label: 'Blog' }, { id: 'personal', label: '个人' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: sourceFilter === item.id }" @click="sourceFilter = item.id">{{ item.label }}</button></div></div>
+      <div class="note-filter-group"><span>状态</span><div><button v-for="item in [{ id: 'published', label: '正式' }, { id: 'draft', label: '草稿' }, { id: 'all', label: '全部' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: statusFilter === item.id }" @click="statusFilter = item.id">{{ item.label }}</button></div></div>
+      <div class="note-filter-group tag-filters"><div class="tag-header"><span>标签（任意匹配）</span><button v-if="allTags.length > 6" type="button" :disabled="busy || deleteDialog" class="tag-expand-button" :aria-label="tagsExpanded ? '收起标签' : '展开全部标签'" :aria-expanded="tagsExpanded" :title="tagsExpanded ? '收起标签' : '展开全部标签'" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '收起' : '展开' }} <svg viewBox="0 0 16 16" :class="{ rotated: tagsExpanded }"><path d="m4 6 4 4 4-4" /></svg></button></div><div class="tag-chips" :class="{ 'is-expanded': tagsExpanded }"><button v-for="tag in shownTags" :key="tag" type="button" :disabled="busy || deleteDialog" :title="`当前来源、状态和搜索结果中有 ${tagCounts.find(([name]) => name === tag)?.[1] || 0} 篇笔记使用此标签；同一篇只计一次`" :class="{ active: tagFilter.includes(tag) }" @click="toggleTag(tag)">{{ tag }} <small>({{ tagCounts.find(([name]) => name === tag)?.[1] || 0 }})</small></button><small v-if="!allTags.length">暂无标签</small></div><small v-if="allTags.length" class="tag-count-hint">计数按当前来源、状态和搜索统计，不受标签筛选影响；已选多个标签时匹配任意一个</small></div>
+      <div class="note-list-heading"><strong>笔记列表</strong><button type="button" :disabled="busy" @click="toggleMultiSelect">{{ multiSelect ? '取消' : '多选' }}</button></div>
+      <div v-if="multiSelect" class="note-selection-toolbar"><label><input ref="selectAllCheckbox" type="checkbox" :checked="visible.length > 0 && visible.every(note => selectedForDeletion.includes(note.documentId))" :aria-checked="visible.some(note => selectedForDeletion.includes(note.documentId)) && !visible.every(note => selectedForDeletion.includes(note.documentId)) ? 'mixed' : undefined" :disabled="busy || !visible.length" @change="toggleVisibleSelection" />全选当前筛选</label><span>已选 {{ selectedForDeletion.length }} 篇</span><button type="button" class="note-delete-button" :disabled="busy || !selectedForDeletion.length" @click="requestDelete(selectedForDeletion)">删除所选（{{ selectedForDeletion.length }}）</button></div>
+      <nav class="note-list" aria-label="笔记列表"><div v-for="note in visible" :key="note.documentId" class="note-list-row" :class="{ selected: selectedId === note.documentId, 'is-checked': selectedForDeletion.includes(note.documentId) }"><input v-if="multiSelect" type="checkbox" :aria-label="`选择笔记：${note.title}`" :checked="selectedForDeletion.includes(note.documentId)" :disabled="busy" @change="toggleDeleteSelection(note.documentId)" /><button class="note-row-open" type="button" :disabled="busy" :title="note.title" @click="multiSelect ? toggleDeleteSelection(note.documentId) : openNote(note.documentId)"><strong>{{ note.title }}</strong><small>{{ note.sourceKind === 'blog' ? 'Blog' : '个人' }} · {{ note.tags.slice(0, 2).join(' · ') || (note.status === 'draft' ? '草稿' : '正式') }}</small><time>{{ date(note.updated) }}</time></button><div v-if="!multiSelect" class="note-row-menu"><button type="button" class="note-row-menu-trigger" :aria-label="`笔记操作：${note.title}`" :aria-expanded="rowMenuId === note.documentId" :disabled="busy" @click.stop="rowMenuId = rowMenuId === note.documentId ? '' : note.documentId">⋯</button><div v-if="rowMenuId === note.documentId" class="note-row-menu-popup"><button type="button" :disabled="busy" @click="requestDelete([note.documentId], $event.currentTarget as HTMLElement)">删除笔记</button></div></div></div><p v-if="!visible.length" class="hint">没有匹配的笔记。</p></nav>
       <p class="notes-private-hint">ⓘ 私人内容仅在授权后加载</p>
     </aside>
     <nav v-if="noteSidebarCollapsed" class="notes-rail" aria-label="笔记快捷操作"><button type="button" :disabled="busy" title="论文" aria-label="论文" @click="emit('select-section', 'papers')"><svg viewBox="0 0 24 24"><path d="M5 4.5h10.5A3.5 3.5 0 0 1 19 8v11H8a3 3 0 0 1-3-3zM8 19v-3h11M8 8h7M8 11h7"/></svg></button><button type="button" class="active" title="笔记" aria-label="笔记"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></svg></button><button type="button" :disabled="busy" title="专题" aria-label="专题" @click="emit('select-section', 'topics')"><svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4zM4 7V5h7l2 2"/></svg></button><button type="button" title="搜索笔记" aria-label="搜索笔记" @click="emit('toggle-sidebar')"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button><button type="button" :disabled="busy || !draftScopeReady" title="新建笔记" aria-label="新建笔记" @click="beginEdit(true)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></nav>
     <div class="notes-workspace">
     <header v-if="editing" class="notes-heading"><div class="notes-heading-actions"><span class="draft-storage-status" :class="`is-${draftStorageState}`">{{ draftStorageState === 'saving' ? '本机草稿保存中…' : draftStorageState === 'saved' ? `本机草稿已保存${draftSavedAt ? ` · ${date(draftSavedAt)}` : ''}` : draftStorageState === 'error' ? '本机草稿未保存' : draftStorageState === 'unavailable' ? '本机自动草稿不可用' : '本机草稿自动保存' }}</span><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-secondary preview-toggle" :disabled="busy" @click="togglePreview"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.8"/></svg>{{ previewMode ? '关闭预览' : '预览' }}</button><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !title.trim() || !editMarkdown.trim()" @click="save"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3 8 3.2 3.2L13 4.8"/></svg>{{ busy ? '正在保存…' : isLocalStore ? '保存到本地 Git' : '保存到 GitHub' }}</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div></header>
     <p v-if="head" class="notes-commit"><details><summary>{{ isLocalStore ? '本地保存详情' : 'GitHub 保存详情' }}</summary><code>{{ head }}</code></details></p>
-    <div v-if="discardPrompt" class="discard-backdrop" role="presentation"><section class="discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">修改尚未保存</h2><p>继续编辑可保留当前输入；放弃修改后才会继续离开。</p><div><button type="button" @click="keepEditing">继续编辑</button><button type="button" class="discard-action" @click="discardEdits">放弃修改</button></div></section></div>
+    <div v-if="discardPrompt" class="discard-backdrop" role="presentation" @keydown="handleDiscardKeydown"><section ref="discardDialogRoot" class="discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title" tabindex="-1"><h2 id="discard-title">修改尚未保存</h2><p>{{ deleteAfterDiscard ? '确认放弃修改后，将继续核对删除的笔记；取消删除不会丢失当前输入。' : '继续编辑可保留当前输入；放弃修改后才会继续离开。' }}</p><div><button type="button" @click="keepEditing">继续编辑</button><button type="button" class="discard-action" @click="discardEdits">放弃修改</button></div></section></div>
+    <div v-if="deleteDialog" class="discard-backdrop" role="presentation" @keydown="handleDeleteKeydown"><section ref="deleteDialogRoot" class="delete-note-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1"><h2 id="delete-title">删除 {{ deleteIds.length }} 篇笔记？</h2><p>删除后将从笔记列表和搜索结果中移除，并提交到 {{ isLocalStore ? '本地 Git 演示库' : 'GitHub' }}。</p><small>历史版本保留在 Git 中。</small><ul><li v-for="id in deleteIds" :key="id">{{ notes.find(note => note.documentId === id)?.title || id }}</li></ul><p v-if="error" class="delete-dialog-error" role="alert">{{ error }}</p><div><button type="button" :disabled="deleteBusy" @click="deleteDialog = false; nextTick(restoreDeleteFocus)">取消</button><button type="button" class="note-delete-button" :disabled="deleteBusy" @click="deleteSelectedNotes">{{ deleteBusy ? '正在删除…' : '删除并提交' }}</button></div></section></div>
     <p v-if="error" class="reader-error" role="alert">{{ error }}</p><p v-if="message" class="notes-success" role="status">{{ message }}</p>
     <p v-if="draftStorageMessage || draftStorageWarning" class="draft-storage-warning" role="alert">{{ draftStorageMessage || draftStorageWarning }}<button type="button" class="action-button action-secondary" @click="downloadDraft">下载当前 Markdown</button></p>
     <section class="draft-recovery-area" aria-label="本机未完成草稿"><button type="button" class="action-button action-secondary recovery-check-button" :disabled="recoveryRefreshing || !draftScopeReady" title="标签页异常关闭未释放租约时，通常约 60 秒后可恢复；也可手动检查。" @click="refreshRecoveryDrafts"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13.3 6A5.5 5.5 0 1 0 13.5 9M13.3 2.8V6h-3.2"/></svg>{{ recoveryRefreshing ? '正在检查…' : '检查可恢复草稿' }}</button><small v-if="!recoveryDrafts.length">已自动保存的草稿，可在重新打开后恢复。</small><section v-if="recoveryDrafts.length" class="draft-recovery" aria-labelledby="draft-recovery-title"><div><h2 id="draft-recovery-title">发现本机未完成草稿</h2><p>恢复不会覆盖已保存内容；保存时仍会用草稿原来的版本基线检查冲突。</p></div><ul><li v-for="draft in recoveryDrafts" :key="draft.id"><span><strong>{{ draft.title || '新建笔记' }}</strong><small>{{ draft.sourceDocumentId ? `编辑已有笔记 · ${draft.sourceKind === 'blog' ? 'Blog' : '个人笔记'}` : '新建个人笔记' }} · {{ date(draft.updatedAt) }} · 基线 {{ draft.baseHead.slice(0, 10) || '无' }}</small></span><span><button type="button" class="action-button action-secondary" :disabled="editing" @click="restoreDraft(draft)">恢复</button><button type="button" class="action-button action-secondary discard-draft-button" :disabled="editing" @click="discardRecoveredDraft(draft)">丢弃</button></span></li></ul><p v-if="editing" class="hint">请先保存或结束当前编辑，再恢复或丢弃其他草稿。</p></section></section>

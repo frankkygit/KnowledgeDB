@@ -311,17 +311,29 @@ onMounted(async () => {
     config.value = await result.json()
   } catch { error.value = '站点连接配置未加载，请刷新页面。' }
   if (import.meta.env.DEV) {
+    let hasLocalDocs = false
     try {
       const response = await fetch('/__local_docs/catalog', { cache: 'no-store' })
-      if (!response.ok) return
-      const catalog = await response.json()
-      papers.value = normalizeCatalog(catalog); localMode = true; connected.value = true; error.value = ''
-      const { LocalNoteStore } = await import('./local-note-store')
-      notesStore.value = new LocalNoteStore()
-      const search = await fetch('/__local_docs/search', { cache: 'no-store' })
-      if (search.ok) searchItems.value = (await search.json()).items || []
-      loadStatus.value = '本地预览 · 私有 docs 草稿'; await restoreRoute()
-    } catch { /* The GitHub connection form remains available without local preview data. */ }
+      if (response.ok) {
+        const catalog = await response.json()
+        papers.value = normalizeCatalog(catalog); localMode = true; connected.value = true; error.value = ''
+        const search = await fetch('/__local_docs/search', { cache: 'no-store' })
+        if (search.ok) searchItems.value = (await search.json()).items || []
+        loadStatus.value = '本地预览 · 私有 docs 草稿'; hasLocalDocs = true
+      }
+    } catch { /* Fall through to the independent notes-only demo probe. */ }
+    if (!hasLocalDocs) {
+      try {
+        const response = await fetch('/__local_notes/catalog', { cache: 'no-store' })
+        if (!response.ok) return
+        const catalog = await response.json()
+        if (!Array.isArray(catalog.notes) || !/^[a-f0-9]{40}$/i.test(catalog.head || '')) throw new Error('本地笔记演示目录无效。')
+        const { LocalNoteStore } = await import('./local-note-store')
+        notesStore.value = new LocalNoteStore()
+        connected.value = true; localMode = false; loadStatus.value = '离线笔记演示 · 本地 Git，远端未接通'; error.value = ''
+      } catch { /* The GitHub connection form remains available without local demo data. */ }
+    }
+    if (connected.value) await restoreRoute()
   }
 })
 function leavePage() { disconnect(false) }

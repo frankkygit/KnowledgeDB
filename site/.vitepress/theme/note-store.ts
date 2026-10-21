@@ -24,6 +24,7 @@ export type NoteSaveInput = {
 }
 
 export type NoteSaveResult = { note: NoteRecord; head: string }
+export type NoteDeleteResult = { documentIds: string[]; head: string }
 export type NoteDocument = { note: NoteRecord; markdown: string; identityMarkdown?: string; head: string }
 export type NoteAsset = Blob
 
@@ -36,5 +37,6 @@ export interface NotesStore {
   get(documentId: string): Promise<NoteDocument>
   asset(documentId: string, name: string): Promise<NoteAsset>
   save(input: NoteSaveInput, expectedHead: string, requestId: string): Promise<NoteSaveResult>
+  deleteNotes(documentIds: string[], expectedHead: string, requestId: string): Promise<NoteDeleteResult>
   disconnect(): void
 }

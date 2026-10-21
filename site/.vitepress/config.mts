@@ -82,7 +82,7 @@ function localNoteDemo(): Plugin {
             catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
             catalog.requests ||= {}
             if (catalog.requests[input.requestId]) {
-              if (catalog.requests[input.requestId].payloadHash !== payloadHash) return send(409, { error: 'requestId 已用于不同内容，拒绝重复提交。' })
+              if (catalog.requests[input.requestId].operation === 'delete' || catalog.requests[input.requestId].payloadHash !== payloadHash) return send(409, { error: 'requestId 已用于不同操作或内容，拒绝重复提交。' })
               const previousNote = catalog.notes.find((item: any) => item.documentId === catalog.requests[input.requestId].documentId)
               const originalCommit = git('log', '--format=%H', '--grep', `Note-Request: ${input.requestId}`, '-n', '1')
               if (!originalCommit) return send(409, { error: '幂等记录存在但对应提交不可用，请保留草稿并检查本地 Git 历史。' })
@@ -131,7 +131,7 @@ function localNoteDemo(): Plugin {
               }
               const markdown = input.markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim() + '\n'
               await writeFile(notePath, markdown)
-              catalog.requests[input.requestId] = { payloadHash, documentId: note.documentId }
+              catalog.requests[input.requestId] = { operation: 'save', payloadHash, documentId: note.documentId }
               await writeFile(catalogPath, JSON.stringify(catalog, null, 2) + '\n')
               git('add', 'catalog/notes.json', note.path, ...assetPaths)
               git('commit', '-m', `Update note: ${note.title}`, '-m', `Note-Request: ${input.requestId}`)
@@ -140,6 +140,51 @@ function localNoteDemo(): Plugin {
               throw error
             }
             return send(200, { note, head: git('rev-parse', 'HEAD'), message: '已保存到本地 Git 演示库；远端尚未接通。' })
+            } finally { unlock() }
+          }
+          if (req.method === 'POST' && url.pathname === '/__local_notes/delete') {
+            const host = req.headers.host || ''
+            const origin = req.headers.origin
+            if (!/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host) || (origin && !origin.startsWith(`http://${host}/`) && origin !== `http://${host}`)) return send(403, { error: '离线写入仅允许来自本机开发页面的请求。' })
+            let body = ''
+            for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) return send(413, { error: '删除请求过大。' }) }
+            const input = JSON.parse(body)
+            if (!/^[a-f0-9-]{36}$/i.test(input.requestId || '') || !Array.isArray(input.documentIds) || !input.documentIds.length || input.documentIds.some((id: unknown) => typeof id !== 'string' || !/^note-[A-Za-z0-9-]+$/.test(id))) return send(400, { error: '删除目标或 requestId 无效。' })
+            const ids = [...new Set(input.documentIds)].sort()
+            if (ids.length !== input.documentIds.length) return send(400, { error: '删除目标包含重复笔记。' })
+            const payloadHash = createHash('sha256').update(JSON.stringify({ operation: 'delete', expectedHead: input.expectedHead, documentIds: ids })).digest('hex')
+            let unlock!: () => void
+            const previousSave = saveQueue
+            saveQueue = new Promise<void>(resolve => { unlock = resolve })
+            await previousSave
+            try {
+              catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
+              catalog.requests ||= {}
+              const prior = catalog.requests[input.requestId]
+              if (prior) {
+                if (prior.operation !== 'delete' || prior.payloadHash !== payloadHash || JSON.stringify(prior.documentIds) !== JSON.stringify(ids)) return send(409, { error: 'requestId 已用于不同操作或笔记集合，拒绝重复删除。' })
+                const originalCommit = git('log', '--format=%H', '--grep', `Note-Request: ${input.requestId}`, '-n', '1')
+                if (!originalCommit) return send(409, { error: '幂等记录存在但对应提交不可用；保留选择后重试。' })
+                return send(200, { documentIds: ids, head: originalCommit })
+              }
+              const head = git('rev-parse', 'HEAD')
+              if (input.expectedHead !== head) return send(409, { error: '本地版本已更新；请刷新目录并重新确认删除。', head })
+              if (git('status', '--porcelain')) return send(409, { error: '本地演示库存在未提交文件；请先检查演示库状态。', head })
+              const targets = ids.map((id: string) => catalog.notes.find((item: any) => item.documentId === id && item.path === `content/notes/${id}/index.md`))
+              if (targets.some((note: any) => !note)) return send(404, { error: '一个或多个目标笔记已不存在；当前选择仍保留。' })
+              catalog.notes = catalog.notes.filter((note: any) => !ids.includes(note.documentId))
+              catalog.requests[input.requestId] = { operation: 'delete', payloadHash, documentIds: ids }
+              try {
+                await writeFile(catalogPath, JSON.stringify(catalog, null, 2) + '\n')
+                git('add', 'catalog/notes.json')
+                for (const note of targets) git('rm', '--', note.path)
+                const label = targets.length === 1 ? targets[0].title : `${targets.length} 篇笔记`
+                git('commit', '-m', `Delete note: ${label}`, '-m', `Note-Request: ${input.requestId}`)
+              } catch (error) {
+                if (git('rev-parse', 'HEAD') === head) { git('reset', '--hard', head); git('clean', '-fd') }
+                throw error
+              }
+              return send(200, { documentIds: ids, head: git('rev-parse', 'HEAD'), message: '已删除本地 Git 演示笔记；历史版本仍保留。' })
             } finally { unlock() }
           }
           return send(405, { error: 'Method not allowed' })

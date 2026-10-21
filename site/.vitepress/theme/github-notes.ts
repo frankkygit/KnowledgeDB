@@ -1,7 +1,7 @@
 import { safePath } from './github-docs'
 import { buildNoteContent, editableNoteMarkdown, noteReferencedAssets } from './note-content'
 import { digest } from './comment-model'
-import type { NoteDocument, NoteRecord, NoteSaveInput, NoteSaveResult, NotesStore } from './note-store'
+import type { NoteDeleteResult, NoteDocument, NoteRecord, NoteSaveInput, NoteSaveResult, NotesStore } from './note-store'
 
 type TreeEntry = { path: string; mode: string; type: string; sha: string; size?: number }
 type State = { head: string; tree: string; entries: Map<string, TreeEntry>; notes: any; documents: any; search: any }
@@ -152,6 +152,7 @@ export class GitHubNotesStore implements NotesStore {
     const payloadHash = await digest(JSON.stringify(input))
     const prior = state.notes.requests[requestId]
     if (prior) {
+      if (prior.operation === 'delete') throw new NotesGitHubError(409, '此 requestId 已用于删除操作，不能再次保存。')
       if (prior.payloadHash !== payloadHash || prior.documentId !== input.documentId) throw new NotesGitHubError(409, '同一保存请求 ID 对应不同内容，拒绝重复写入。')
       const note = state.notes.notes.find((item: any) => item.documentId === prior.documentId)
       if (!note) throw new Error('保存请求记录找不到对应笔记，已停止重复保存。')
@@ -236,6 +237,61 @@ export class GitHubNotesStore implements NotesStore {
     }
     this.#snapshot = await this.readState()
     return { note, head: commit.sha }
+  }
+
+  async deleteNotes(documentIds: string[], expectedHead: string, requestId: string): Promise<NoteDeleteResult> {
+    if (!/^[a-f0-9]{40}$/i.test(expectedHead)) throw new Error('删除请求没有有效的 docs HEAD 基线；请刷新目录后重试。')
+    if (!/^[a-f0-9-]{36}$/i.test(requestId)) throw new Error('删除请求 ID 无效。')
+    if (!Array.isArray(documentIds) || !documentIds.length || documentIds.some(id => !validId(id))) throw new Error('删除目标笔记 ID 无效。')
+    const ids = [...new Set(documentIds)].sort()
+    if (ids.length !== documentIds.length) throw new Error('删除目标包含重复笔记。请刷新后重试。')
+    const payloadHash = await digest(JSON.stringify({ operation: 'delete', expectedHead, documentIds: ids }))
+    const state = await this.readState()
+    const prior = state.notes.requests[requestId]
+    if (prior) {
+      if (prior.operation !== 'delete' || prior.payloadHash !== payloadHash || JSON.stringify(prior.documentIds) !== JSON.stringify(ids)) throw new NotesGitHubError(409, '此 requestId 已用于不同操作或笔记集合，拒绝重复删除。')
+      this.#snapshot = state
+      return { documentIds: ids, head: await this.findRequestCommit(requestId) }
+    }
+    if (state.head !== expectedHead) throw new NotesGitHubError(409, 'docs main 已被其他窗口或编辑者更新。请刷新目录后确认删除；当前选择仍保留。')
+    const targets = ids.map(id => {
+      const matchingNotes = state.notes.notes.filter((item: any) => item.documentId === id)
+      const matchingDocs = state.documents.documents.filter((item: any) => item.documentId === id)
+      const note = matchingNotes[0]
+      const doc = matchingDocs[0]
+      const body = state.entries.get(`content/notes/${id}/index.md`)
+      const otherSearchRecords = state.search.items.filter((item: any) => item.documentId === id && item.type !== 'notes')
+      if (matchingNotes.length !== 1 || matchingDocs.length !== 1 || !note || note.path !== `content/notes/${id}/index.md` || !doc || doc.type !== 'notes' || doc.path !== note.path || !body || body.type !== 'blob' || body.mode !== '100644' || otherSearchRecords.length) throw new Error(`笔记 ${id} 在活动目录中不存在或映射异常；已停止删除。`)
+      return note
+    })
+    const notes = { ...state.notes, notes: state.notes.notes.filter((item: any) => !ids.includes(item.documentId)), requests: { ...state.notes.requests, [requestId]: { operation: 'delete', payloadHash, documentIds: ids } } }
+    const documents = { ...state.documents, documents: state.documents.documents.filter((item: any) => !ids.includes(item.documentId) || item.type !== 'notes' || item.path !== `content/notes/${item.documentId}/index.md`) }
+    const search = { ...state.search, items: state.search.items.filter((item: any) => !ids.includes(item.documentId)) }
+    const title = targets.length === 1 ? targets[0].title : `${targets.length} 篇笔记`
+    const writes = new Map([
+      ['catalog/notes.json', `${JSON.stringify(notes, null, 2)}\n`],
+      ['catalog/documents.json', `${JSON.stringify(documents, null, 2)}\n`],
+      ['catalog/search.json', `${JSON.stringify(search, null, 2)}\n`],
+    ])
+    const treeEntries: { path: string; mode: string; type: string; sha: string | null }[] = targets.map(note => ({ path: note.path, mode: '100644', type: 'blob', sha: null }))
+    for (const [path, content] of writes) {
+      const blob = await this.request('git/blobs', 'POST', { content, encoding: 'utf-8' })
+      treeEntries.push({ path, mode: '100644', type: 'blob', sha: blob.sha })
+    }
+    const tree = await this.request('git/trees', 'POST', { base_tree: state.tree, tree: treeEntries })
+    const commit = await this.request('git/commits', 'POST', { message: `Delete note: ${title}\n\nNote-Request: ${requestId}`, tree: tree.sha, parents: [state.head] })
+    try {
+      await this.request(`git/refs/heads/${safePath(this.branch)}`, 'PATCH', { sha: commit.sha, force: false })
+    } catch (cause) {
+      if (cause instanceof NotesGitHubError && [409, 422].includes(cause.status)) {
+        const latest = await this.request(`git/ref/heads/${safePath(this.branch)}`)
+        if (latest.object?.sha !== state.head) throw new NotesGitHubError(409, '删除期间 docs main 已并发更新；请刷新目录并重新确认，当前选择仍保留。')
+        throw new NotesGitHubError(cause.status, 'GitHub 拒绝更新 docs main；请检查分支保护规则，当前选择仍保留。')
+      }
+      throw cause
+    }
+    this.#snapshot = await this.readState()
+    return { documentIds: ids, head: commit.sha }
   }
 
   async findRequestCommit(requestId: string): Promise<string> {

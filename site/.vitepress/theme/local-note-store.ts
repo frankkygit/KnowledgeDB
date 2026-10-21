@@ -1,4 +1,4 @@
-import type { NoteAsset, NoteDocument, NoteRecord, NoteSaveInput, NoteSaveResult, NotesStore } from './note-store'
+import type { NoteAsset, NoteDeleteResult, NoteDocument, NoteRecord, NoteSaveInput, NoteSaveResult, NotesStore } from './note-store'
 import { editableNoteMarkdown } from './note-content'
 
 async function json(path: string, init?: RequestInit) {
@@ -30,6 +30,10 @@ export class LocalNoteStore implements NotesStore {
     // The demo server allocates document IDs for new notes; it never reads or writes production docs.
     const data = await json('/__local_notes/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...input, documentId: input.sourceDocumentId, requestId, expectedHead }) })
     return { note: data.note, head: data.head }
+  }
+  async deleteNotes(documentIds: string[], expectedHead: string, requestId: string): Promise<NoteDeleteResult> {
+    const data = await json('/__local_notes/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ documentIds, requestId, expectedHead }) })
+    return { documentIds: data.documentIds, head: data.head }
   }
   disconnect() {}
 }

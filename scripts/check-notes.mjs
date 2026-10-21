@@ -138,7 +138,7 @@ class MockGitHub {
   };
 }
 function seedFiles() {
-  return { "catalog/papers.json": JSON.stringify({ schemaVersion: 1, papers: [{ paperId: "paper-synthetic", title: "Synthetic paper", documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", contentRevision: "sha256:" + "a".repeat(64) }] }] }), "catalog/documents.json": JSON.stringify({ schemaVersion: 1, documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", status: "published", contentRevision: "sha256:" + "a".repeat(64) }] }), "catalog/search.json": JSON.stringify({ schemaVersion: 1, normalizationVersion: "kb-text-v1", items: [{ paperId: "paper-synthetic", documentId: "doc-paper", type: "analysis", title: "Synthetic paper", sectionTitle: "Preserved", blockId: "b-paper", text: "Must remain in paper search", contentRevision: "sha256:" + "a".repeat(64) }] }), "content/papers/synthetic/analysis.md": "# Synthetic paper\n\n<!-- kb:block b-paper -->\nPreserve this paper.\n", ["revisions/doc-paper/" + "a".repeat(64) + ".json"]: JSON.stringify({ documentId: "doc-paper", contentRevision: "sha256:" + "a".repeat(64), paragraphs: [] }) };
+  return { "catalog/papers.json": JSON.stringify({ schemaVersion: 1, papers: [{ paperId: "paper-synthetic", title: "Synthetic paper", documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", contentRevision: "sha256:" + "a".repeat(64) }] }] }), "catalog/documents.json": JSON.stringify({ schemaVersion: 1, documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", status: "published", contentRevision: "sha256:" + "a".repeat(64) }] }), "catalog/search.json": JSON.stringify({ schemaVersion: 1, normalizationVersion: "kb-text-v1", items: [{ paperId: "paper-synthetic", documentId: "doc-paper", type: "analysis", title: "Synthetic paper", sectionTitle: "Preserved", blockId: "b-paper", text: "Must remain in paper search", contentRevision: "sha256:" + "a".repeat(64) }] }), "content/papers/synthetic/analysis.md": "# Synthetic paper\n\n<!-- kb:block b-paper -->\nPreserve this paper.\n", ["revisions/doc-paper/" + "a".repeat(64) + ".json"]: JSON.stringify({ documentId: "doc-paper", contentRevision: "sha256:" + "a".repeat(64), paragraphs: [] }), "annotations/2026/10/21/doc-paper.jsonl": "{\"operationId\":\"preserve-comment\"}\n" };
 }
 const built = await build({ stdin: { contents: "export {GitHubNotesStore} from './site/.vitepress/theme/github-notes.ts'; export {buildNoteContent,editableNoteMarkdown} from './site/.vitepress/theme/note-content.ts'", resolveDir: process.cwd(), sourcefile: "check-notes-entry.ts", loader: "ts" }, bundle: true, platform: "node", format: "esm", write: false, logLevel: "silent" });
 const { GitHubNotesStore, buildNoteContent, editableNoteMarkdown } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
@@ -270,7 +270,44 @@ async function checkAdapter() {
     assert.equal(mock.head, readonlyHead);
     mock.failWriteStatus = 0;
     await assert.rejects(store.save({ ...lostInput, documentId: "note-invalid-asset", assets: [{ name: "../outside.png", type: "image/png", base64: "aGVsbG8=" }] }, mock.head, crypto.randomUUID()), /附件无效/);
-    console.log("PASS production GitHub mock: empty private connection, original paper/docs/search/snapshots preserved, one atomic non-force commit including md/assets/snapshot/catalog/index, fulltext nonparagraph, idempotent retry, payload binding, stale HEAD before writes, lost reply replay, concurrent PATCH atomicity, 403/no overwrite, asset traversal rejection.");
+    const one = { ...input, documentId: "note-delete-one", title: "Delete one" };
+    const oneSave = await store.save(one, mock.head, crypto.randomUUID());
+    const beforeOneDelete = mock.head;
+    const beforeOneDeletePatches = mock.requests.filter(r => r.method === "PATCH").length;
+    const oneDeleteId = crypto.randomUUID();
+    const oneDelete = await store.deleteNotes([one.documentId], oneSave.head, oneDeleteId);
+    assert.notEqual(oneDelete.head, beforeOneDelete);
+    const afterOneFiles = mock.files();
+    assert.ok(!afterOneFiles.has(`content/notes/${one.documentId}/index.md`));
+    assert.ok(afterOneFiles.has(`revisions/${one.documentId}/${JSON.parse(mock.files(oneSave.head).get('catalog/notes.json')).notes.find(n => n.documentId === one.documentId).contentRevision.slice(7)}.json`));
+    assert.ok(afterOneFiles.has(`content/notes/${one.documentId}/assets/test.png`));
+    assert.equal(afterOneFiles.get("annotations/2026/10/21/doc-paper.jsonl"), initial.get("annotations/2026/10/21/doc-paper.jsonl"));
+    assert.ok(JSON.parse(afterOneFiles.get("catalog/documents.json")).documents.some(d => d.documentId === "doc-paper"));
+    assert.ok(JSON.parse(afterOneFiles.get("catalog/search.json")).items.some(i => i.documentId === "doc-paper"));
+    assert.equal(mock.requests.filter(r => r.method === "PATCH").length, beforeOneDeletePatches + 1, "one delete request must create exactly one ref update");
+    await assert.rejects(store.save({ ...one, sourceDocumentId: one.documentId }, oneSave.head, oneDeleteId), /requestId|请求 ID|不同操作/);
+    const batchA = { ...lostInput, documentId: "note-delete-a", title: "Delete A" };
+    const batchB = { ...lostInput, documentId: "note-delete-b", title: "Delete B" };
+    const a = await store.save(batchA, mock.head, crypto.randomUUID());
+    const b = await store.save(batchB, a.head, crypto.randomUUID());
+    const batchIds = [batchA.documentId, batchB.documentId];
+    const batchDeleteId = crypto.randomUUID();
+    mock.losePatchReply = true;
+    await assert.rejects(store.deleteNotes(batchIds, b.head, batchDeleteId), /连接 GitHub/);
+    const afterLostDelete = mock.head;
+    const patchesAfterDelete = mock.requests.filter(r => r.method === "PATCH").length;
+    const retry = await store.deleteNotes([...batchIds].reverse(), b.head, batchDeleteId);
+    assert.equal(retry.head, afterLostDelete);
+    assert.equal(mock.requests.filter(r => r.method === "PATCH").length, patchesAfterDelete, "lost reply retry must find original delete commit");
+    assert.ok(!mock.files().has(`content/notes/${batchA.documentId}/index.md`));
+    assert.ok(!mock.files().has(`content/notes/${batchB.documentId}/index.md`));
+    await assert.rejects(store.deleteNotes([batchA.documentId], b.head, batchDeleteId), /requestId|操作或笔记集合/);
+    const stale = await store.list(); mock.advance();
+    await assert.rejects(store.deleteNotes([lostInput.documentId], stale.head, crypto.randomUUID()), /并发|更新/);
+    const protectedHead = mock.head; mock.failWriteStatus = 403;
+    await assert.rejects(store.deleteNotes([lostInput.documentId], protectedHead, crypto.randomUUID()), /拒绝|权限/);
+    mock.failWriteStatus = 0;
+    console.log("PASS synthetic GitHub deletion: single and batch atomic commits, active body/catalog/search removed, snapshot/assets/comments/papers/history preserved, idempotent lost-reply retry with order-normalized payload binding, cross-operation request ID rejection, stale HEAD and 403 retain content.");
   } finally {
     store.disconnect();
     globalThis.fetch = originalFetch;
