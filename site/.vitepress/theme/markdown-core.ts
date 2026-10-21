@@ -100,7 +100,10 @@ md.core.ruler.after('inline', 'kb-structure', (state: any) => {
   }
 })
 
+export function markdownBody(markdown: string): string { return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '') }
+export function parseMarkdownBody(markdown: string, documentPath: string): any[] {
+  return md.parse(markdownBody(markdown), { documentPath })
+}
 export function renderMarkdownBody(markdown: string, documentPath: string): string {
-  const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
-  return md.render(body, { documentPath })
+  return md.renderer.render(parseMarkdownBody(markdown, documentPath), md.options, { documentPath })
 }

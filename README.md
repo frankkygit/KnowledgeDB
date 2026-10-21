@@ -2,7 +2,7 @@
 
 arXiv 源码辅助翻译流程见 [kb-arxiv-latex-translate](skills/local/kb-arxiv-latex-translate/SKILL.md)：给定链接后下载同版本原 PDF 和 LaTeX 源码，用源码正文、公式和原图辅助 nature-reader 生成中文 Markdown 阅读版；不编译 LaTeX、不生成中文 TeX/PDF。默认衔接私有 docs 入库发布；明确“仅本地翻译，暂不入库或发布”可停在本地。当前为已创建的技能编排规范，真实论文端到端待验证。
 
-以 Git 管理论文翻译、论文解读、个人笔记和段落评论。站点代码、正文、评论拆成三个仓库，正文和评论通过私有 Git submodule 引入。GitHub Pages 只发布阅读器程序；浏览器使用用户填写的 GitHub 令牌直接读写私库，不部署额外业务后端。
+以 Git 管理论文翻译、论文解读、个人笔记和段落评论。站点代码、正文、评论拆成三个仓库，正文和评论通过私有 Git submodule 引入。GitHub Pages 只发布阅读器程序；浏览器使用用户填写的 GitHub 令牌直接读写私库，不部署额外业务后端。笔记的离线测试版启动及验收见 [docs/offline-note-preview.md](docs/offline-note-preview.md)。
 
 论文默认先展示技术概述，通过链接在阅读区渲染中文翻译 Markdown；采用左侧列表、右侧内容布局，并支持正文检索。
 
@@ -21,6 +21,10 @@ arXiv 源码辅助翻译流程见 [kb-arxiv-latex-translate](skills/local/kb-arx
 方案依据聊天《构建知识库方案》和 2026-10-20 的补充要求：第一版即支持段落评价；不采用 Giscus 作为评论存储；正文重写后保留所有评论，待重新链接的评论在页底展示，由库主人手动关联新段落。
 
 此处“知识库/数据库生成”指生成结构化 Markdown、元数据与索引。第一版以 Git 文件作为正式存储，暂不引入关系数据库或向量数据库。
+
+## 笔记离线演示
+
+本地 Markdown 笔记测试版的启动及验收步骤见 [docs/offline-note-preview.md](docs/offline-note-preview.md)。运行 `npm run dev:notes -- --port 5180` 后，可用合成数据体验笔记筛选、编辑、预览、图片上传及本地 Git 保存；该模式不会连接远端或发布内容。
 
 ## 本地启动与目录
 

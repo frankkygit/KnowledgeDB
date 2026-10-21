@@ -1,4 +1,4 @@
-export type ReaderConfig = { repository: string; ref: string; catalogPath: string; searchPath: string }
+export type ReaderConfig = { repository: string; ref: string; catalogPath: string; searchPath: string; notesBranch?: string }
 
 export function safePath(path: string): string {
   const parts = path.split('/')
