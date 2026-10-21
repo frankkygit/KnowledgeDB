@@ -1,6 +1,6 @@
 # GitHub Pages 上线
 
-当前上线范围：公开阅读器程序。`npm run preview:private` 使用的本地论文接口不会部署到 Pages；论文阅读可使用 GitHub 只读访问令牌读取固定版本的私有 docs。在线笔记新增、编辑和删除会直接提交到私有 docs，需要 Contents 读写权限。令牌在站点连接框中填写并只留在当前标签页内存，SSH 仅用于本机提交。原文、翻译和评论不会因本次上线变为公开内容。
+当前上线范围：公开阅读器程序。`npm run preview:private` 使用的本地论文接口不会部署到 Pages；阅读器使用一次填写的 GitHub PAT 读取固定版本的私有 docs，并直接读写私有 comments。在线笔记新增、编辑和删除也会直接提交到私有 docs。PAT 需同时获得两库 Contents 读写权限，只留在当前标签页内存；SSH 仅用于本机提交。原文、翻译和评论不会因本次上线变为公开内容。
 
 ## 首次设置
 
@@ -32,4 +32,4 @@ npm run preview
 
 先在 sources/docs 中提交并推送。然后在主库提交 sources/docs 的 gitlink，同时更新 release-manifest.json 和 site/public/reader-config.json 中 docs commit；三个值必须一致。推送主库后 Pages 自动构建，不需要 CI 读取私库或保存个人访问令牌。
 
-第一次创建网页令牌：GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens，Repository access 只选择 KnowledgeDB-docs。只读论文阅读设为 Contents Read-only；使用在线笔记新建、编辑或删除时设为 Read and write。用户手动生成并粘贴到站点，不在聊天中提供。
+第一次创建网页令牌：GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens，同时选择 `KnowledgeDB-docs` 与 `KnowledgeDB-comments`，并为两个仓库都设为 Contents Read and write。进入阅读器时填写一次；令牌只在当前标签页内存使用，用户手动生成并粘贴到站点，不在聊天中提供。评论仓库 `frankkygit/KnowledgeDB-comments` 与分支 `main` 由 `site/public/reader-config.json` 配置，评论连接失败可在评论区重试，不会阻止 docs 阅读。

@@ -21,14 +21,11 @@ VitePress 用于公开外壳、导航框架与主题；私人内容不进入其�
 
 真正的数据访问通过 fine-grained personal access token（PAT）完成。第一版是个人工具，选择手动填写令牌，不把“当前浏览器已登录 github.com”误当成 API 已授权，也不实现需要机密凭据交换的 OAuth 服务。
 
-建议两个按需连接项：
-
-- 正文连接：令牌仅选择 docs 仓库，Contents 只读；用于正文、索引和快照。
-- 评论连接：令牌仅选择 comments 仓库，Contents 读写；用于评论读取、提交与编辑。
+进入阅读器时填写一次 PAT。该 PAT 需在 fine-grained token 中同时选择 `KnowledgeDB-docs` 与 `KnowledgeDB-comments`，并为两个仓库都授予 Contents 读写权限：docs 用于正文、索引、快照及在线笔记；comments 用于评论读取、提交与编辑。评论仓库和分支来自公开连接配置，阅读器连接 docs 后会自动尝试连接 comments。评论权限失败只影响评论区，可在评论区重试，不影响正文阅读。
 
 令牌权限按目标 GitHub REST 端点再核对；不申请工作流管理、账户管理或其他仓库权限。正文已连接但评论未连接时可以阅读，评论区提示连接评论库。评论写权限不足时保留输入，不假装保存成功。GitHub 的仓库权限才是最终授权，页面中的 owner 标记不构成权限控制。
 
-两个令牌只保存当前标签页内存，不能写进源码、页面 URL、Git commit、日志、localStorage、sessionStorage 或 IndexedDB。刷新/关闭后需要重新填写；第一版明确接受此体验取舍。不在聊天中索要令牌，凭据在实际站点的连接界面填写。
+同一个 PAT 只保存在当前标签页内存，不能写进源码、页面 URL、Git commit、日志、localStorage、sessionStorage 或 IndexedDB。刷新/关闭或断开后需要重新填写；第一版明确接受此体验取舍。不在聊天中索要令牌，凭据在实际站点的连接界面填写。
 
 请求只将对应令牌放入 `https://api.github.com` 的 Authorization 头，不转发到附件地址或第三方域名。退出清理令牌、正文、索引、评论与附件 Blob URL。按用户本次要求新增的浏览器派生 HTML 缓存是持久存储的有限例外，授权门槛、版本键及清理规则见 [阅读器功能说明](reader-features.md)。读取私库的 fetch 使用 no-store，不启用无需授权即可阅读私人内容的离线入口或 Service Worker；不能承诺清除用户已自行下载的内容。
 
@@ -65,7 +62,7 @@ comment.add、comment.edit、binding.set 都在 comments 私库产生独立 comm
 ## 6. 验收要求
 
 - 无令牌或无私库权限时，Pages HTML、程序包、源码映射、路由与搜索文件中找不到测试正文、标题、评论或附件。
-- 正文只读令牌可阅读，不能修改正文；评论权限另行连接并由 GitHub 校验。
+- 一次输入的 PAT 对 docs 与 comments 分别发送到对应 GitHub 仓库；comments 权限失败时 docs 阅读仍可用。
 - 真实跨域读取、创建 commit、分支冲突和授权撤销都完成浏览器验证；不把本地模拟当作已经打通 GitHub。
 - 令牌过期、限流、网络失败、分支规则拒绝时保留草稿，显示可操作的错误。
 - 退出后清理当前内存；检查持久存储、URL、日志与构建产物没有令牌。

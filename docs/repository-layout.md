@@ -46,13 +46,13 @@ site/
 
 其他文档和技能里的 content/、catalog/、revisions/ 相对于 docs 子库，annotations/ 相对于 comments 子库。实现时将 DOCS_ROOT/COMMENTS_ROOT 作为显式配置，避免把私有数据误写入站点主库。
 
-CI 拉取凭据与浏览器个人连接令牌分开配置；CI 只读两个数据仓库，浏览器的正文令牌只读 docs、评论令牌读写 comments。更新翻译的 Agent 在 docs 库提交，不能因此获得修改评论的职责。参考仓库具体实现可借鉴结构；未确认许可证前不直接复制其脚本或主题资源。
+CI 拉取凭据与浏览器个人连接令牌分开配置；CI 只读两个数据仓库，浏览器共享 PAT 对 docs 和 comments 分别授权 Contents 读写。更新翻译的 Agent 在 docs 库提交，不能因此获得修改评论的职责。参考仓库具体实现可借鉴结构；未确认许可证前不直接复制其脚本或主题资源。
 
 ## 3. Pages 的公开产物边界
 
 Pages 仅发布通用程序、主题、图标、连接配置和版本 SHA；不在构建时预渲染私人正文，不发布私人标题目录、摘要、搜索索引、附件、快照或评论 JSON。入口密码可作为参考站式的界面门槛，但不能用于获得私库数据。
 
-正文、目录、索引与附件在用户填写 docs 只读令牌后通过 GitHub API 读取。评论通过单独的 comments 令牌读取/写入。没有私库授权的人可以访问程序，但不能获取私人数据。浏览器已经登录 github.com 不等于 REST API 已获授权。细节见 [浏览器直连 GitHub](browser-github-access.md)。
+正文、目录、索引、附件与在线笔记在用户填写共享 PAT 后通过 GitHub API 读取或写入；同一 PAT 还用于 comments 私库。令牌须对 docs 与 comments 两库分别授予 Contents 读写权限。没有私库授权的人可以访问程序，但不能获取私人数据。浏览器已经登录 github.com 不等于 REST API 已获授权。细节见 [浏览器直连 GitHub](browser-github-access.md)。
 
 这样将 GitHub Pages 作为确定的托管方案，不再保留第三方业务后端作为默认路径。公开主库仍可能暴露子库名称、地址、版本 SHA 与代码；不承诺隐藏这些元信息。已经读取的数据可被获授权者自行保存，退出只清理程序管理的内存。
 

@@ -1,5 +1,7 @@
 {
   "repository": "frankkygit/KnowledgeDB-docs",
+  "commentsRepository": "frankkygit/KnowledgeDB-comments",
+  "commentsBranch": "main",
   "ref": "3b7119627ab5d927cdaefbd76491286c34455c29",
   "catalogPath": "catalog/papers.json",
   "searchPath": "catalog/search.json"

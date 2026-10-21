@@ -1,4 +1,9 @@
-export type ReaderConfig = { repository: string; ref: string; catalogPath: string; searchPath: string; notesBranch?: string }
+export type ReaderConfig = { repository: string; ref: string; catalogPath: string; searchPath: string; notesBranch?: string; commentsRepository?: string; commentsBranch?: string }
+export const DEFAULT_COMMENTS_REPOSITORY = 'frankkygit/KnowledgeDB-comments'
+export const DEFAULT_COMMENTS_BRANCH = 'main'
+export function commentsConfig(config: ReaderConfig | null | undefined) {
+  return { repository: config?.commentsRepository || DEFAULT_COMMENTS_REPOSITORY, branch: config?.commentsBranch || DEFAULT_COMMENTS_BRANCH }
+}
 
 export function safePath(path: string): string {
   const parts = path.split('/')

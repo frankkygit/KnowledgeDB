@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { withBase } from 'vitepress'
-import { GitHubDocs, type ReaderConfig } from './github-docs'
+import { commentsConfig, GitHubDocs, type ReaderConfig } from './github-docs'
 import { renderMarkdown, sanitizeHtml } from './markdown'
 import { RenderCache, renderCacheKey } from './render-cache'
 import ReaderComments from './ReaderComments.vue'
@@ -23,7 +23,9 @@ const papers = ref<any[]>([])
 const searchItems = ref<any[]>([])
 const selectedPaperId = ref('')
 const config = ref<ReaderConfig | null>(null)
+const commentStoreConfig = computed(() => commentsConfig(config.value))
 const tokenInput = ref('')
+const sharedToken = ref('')
 const connected = ref(false)
 const notesStore = shallowRef<NotesStore | null>(null)
 const connecting = ref(false)
@@ -106,6 +108,7 @@ function articleLink(event: MouseEvent) {
 }
 
 let client: GitHubDocs | null = null
+let pendingNotesStore: GitHubNotesStore | null = null
 let localMode = false
 let generation = 0
 let documentGeneration = 0
@@ -119,7 +122,9 @@ const visiblePapers = computed(() => needle.value ? papers.value.filter(p => `${
 function clearImages() { objectUrls.forEach(url => URL.revokeObjectURL(url)); objectUrls = [] }
 function disconnect(purgeCache = true) {
   generation++; documentGeneration++
+  sharedToken.value = ''
   client?.disconnect(); client = null; localMode = false
+  pendingNotesStore?.disconnect(); pendingNotesStore = null
   notesStore.value?.disconnect(); notesStore.value = null
   if (purgeCache) void htmlCache.clear(); else htmlCache.forget()
   resetHeadingState(); cacheStatus.value = ''
@@ -284,13 +289,18 @@ async function connectWithToken() {
     if (!Array.isArray(search.items)) throw new Error('全文索引格式不正确。')
     searchItems.value = search.items
     const noteStore = new GitHubNotesStore(config.value.repository, token, config.value.notesBranch || 'main')
+    pendingNotesStore = noteStore
     await noteStore.connect()
-    if (session !== generation) { noteStore.disconnect(); return }
+    if (session !== generation || client !== reader) { noteStore.disconnect(); if (pendingNotesStore === noteStore) pendingNotesStore = null; return }
+    pendingNotesStore = null
     notesStore.value = noteStore
+    sharedToken.value = token
     connected.value = true; loadStatus.value = `已连接 · ${papers.value.length} 篇论文`
     await restoreRoute()
   } catch (cause) {
     if (session !== generation) return
+    sharedToken.value = ''
+    pendingNotesStore?.disconnect(); pendingNotesStore = null
     client?.disconnect(); client = null; notesStore.value?.disconnect(); notesStore.value = null
     papers.value = []; searchItems.value = []; renderedHtml.value = ''; connected.value = false
     loadStatus.value = '连接未完成'
@@ -375,7 +385,7 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
         <div v-else-if="activeSection === 'notes' && !connected" class="connection-card">
           <p class="eyebrow">私人知识库</p><h1>连接你的资料库</h1><p>笔记将直接保存在私有 KnowledgeDB-docs 仓库。请选择有 Contents 读写权限的令牌。</p>
           <form @submit.prevent="connectWithToken"><label for="github-repository">资料仓库</label><input id="github-repository" :value="config?.repository || '正在加载配置…'" readonly /><label for="github-token">GitHub 资料库令牌</label><input id="github-token" v-model="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="授权私有 docs 仓库 Contents 读写权限" :disabled="connecting" /><button type="submit" :disabled="connecting || !config || !tokenInput.trim()">{{ connecting ? '正在连接…' : '连接并加载' }}</button></form>
-          <p class="hint">令牌只在当前标签页内存使用。评论库仍单独填写令牌；同一 PAT 可分别授权两个私有库 Contents 读写。</p>
+          <p class="hint">PAT 仅在当前标签页内存使用。请为同一 PAT 同时授予 docs 与 comments 私库的 Contents 读写权限。</p>
         </div>
         <div v-else-if="activeSection === 'notes'" class="empty-document"><h2>笔记库连接未完成</h2><p>{{ error || '请断开连接后重新输入有 docs Contents 读写权限的令牌。' }}</p><button type="button" @click="disconnect(false)">重新连接</button></div>
         <div v-else-if="!connected" class="connection-card">
@@ -385,10 +395,10 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
             <label for="github-repository">资料仓库</label>
             <input id="github-repository" :value="config?.repository || '正在加载配置…'" readonly />
             <label for="github-token">GitHub 资料库令牌</label>
-            <input id="github-token" v-model="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="资料库 Contents 读写权限（笔记保存需要）" :disabled="connecting" />
+            <input id="github-token" v-model="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="docs 与 comments 私库 Contents 读写权限" :disabled="connecting" />
             <button type="submit" :disabled="connecting || !config || !tokenInput.trim()">{{ connecting ? '正在连接…' : '连接并加载' }}</button>
           </form>
-          <p class="hint">令牌只在当前标签页内存使用，刷新或断开后需要重新填写。请勿把令牌发到聊天中。</p>
+          <p class="hint">PAT 只在当前标签页内存使用，刷新或断开后需要重新填写。请为 docs 与 comments 私库都授予 Contents 读写权限；请勿把令牌发到聊天中。</p>
           <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建 fine-grained 令牌</a>
         </div>
         <template v-else>
@@ -404,7 +414,7 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
             <button type="button" class="outline-toggle" :aria-expanded="outlineOpen" :aria-label="outlineOpen ? '收起目录' : '展开目录'" @click="toggleOutline">{{ outlineOpen ? '收起目录' : '☰' }}</button>
             <button v-for="heading in headings" :key="heading.id" type="button" class="outline-item" :class="{ active: activeHeadingId === heading.id }" :aria-current="activeHeadingId === heading.id ? 'location' : undefined" :aria-label="heading.title" :title="heading.title" :style="{ '--outline-level': heading.level }" @click="jumpHeading(heading.id)"><span class="outline-mark" aria-hidden="true"></span><span class="outline-title">{{ heading.title }}</span></button>
           </nav>
-          <ReaderComments v-if="activeDoc" :doc="activeDoc" :article="article" :docs-commit="config?.ref || ''" :load-snapshot="loadSnapshot" :local-mode="localMode" @busy="commentsBusy = $event" />
+          <ReaderComments v-if="activeDoc" :doc="activeDoc" :article="article" :docs-commit="config?.ref || ''" :docs-repository="config?.repository || ''" :load-snapshot="loadSnapshot" :local-mode="localMode" :shared-token="sharedToken" :repository="commentStoreConfig.repository" :branch="commentStoreConfig.branch" :session-key="String(generation)" @busy="commentsBusy = $event" />
           <button v-if="renderedHtml" class="back-to-top" type="button" aria-label="返回文档首行" @click="goTop">↑ 返回文首</button>
           <section v-if="!renderedHtml && !loadingDocument" class="empty-document"><h2>暂无可展示内容</h2><p>当前分类或文档尚未整理。</p></section>
         </template>

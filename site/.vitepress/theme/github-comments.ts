@@ -1,15 +1,18 @@
 import { safePath } from './github-docs.ts'
 import { digest, operationDate, replay, shardFor, type Operation } from './comment-model.ts'
-class GitHubError extends Error { constructor(readonly status: number) { super(status === 401 ? '评论令牌无效或已过期，请重新连接；草稿已保留。' : status === 404 ? '评论仓库或分支不可读，请检查仓库名与令牌权限。' : status === 403 || status === 429 ? '评论访问被拒绝或限流，请检查 Contents 读写权限与分支规则。' : `评论请求失败（${status}），草稿已保留。`) } }
+class GitHubError extends Error { constructor(readonly status: number) { super(status === 401 ? 'PAT 无效或已过期，请重新连接资料库；评论草稿已保留。' : status === 404 ? '评论仓库或分支不可读，请检查配置及 PAT 权限。' : status === 403 || status === 429 ? 'PAT 对评论私库的 Contents 读写权限不足或请求受限，请检查权限与分支规则。' : `评论请求失败（${status}），草稿已保留。`) } }
 export class GitHubComments {
   #token: string
   #abort = new AbortController()
+  #disconnected = false
   constructor(readonly repository: string, readonly branch: string, token: string) {
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !token.trim()) throw new Error('请填写评论私库 owner/repo 和读写令牌。')
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !token.trim()) throw new Error('评论仓库配置无效，或尚未连接含 PAT 的资料库会话。')
     safePath(branch)
     this.#token = token.trim()
   }
+  #assertActive() { if (this.#disconnected) throw new DOMException('评论会话已断开。', 'AbortError') }
   async request(path: string, method = 'GET', body?: any): Promise<any> {
+    this.#assertActive()
     // The repository metadata endpoint has no trailing slash: GitHub rejects its
     // OPTIONS preflight otherwise, hiding the 404 behind a browser fetch error.
     const url = `https://api.github.com/repos/${this.repository}${path ? `/${path}` : ''}`
@@ -25,17 +28,23 @@ export class GitHubComments {
       throw new Error(`${stage}时未能连接 GitHub API，请检查网络、代理或浏览器拦截后重试；评论草稿已保留。`)
     }
     if (!response.ok) throw new GitHubError(response.status)
+    this.#assertActive()
     return response.json()
   }
   async connect() {
     const repo = await this.request('')
+    this.#assertActive()
     if (repo.private !== true) throw new Error('评论必须保存在私有仓库，请选择 comments 私库。')
     await this.request(`git/ref/heads/${safePath(this.branch)}`)
+    this.#assertActive()
   }
   async read() {
     const head = (await this.request(`git/ref/heads/${safePath(this.branch)}`)).object.sha
+    this.#assertActive()
     const commit = await this.request(`git/commits/${head}`)
+    this.#assertActive()
     const tree = await this.request(`git/trees/${commit.tree.sha}?recursive=1`)
+    this.#assertActive()
     if (tree.truncated) throw new Error('评论目录过大，无法完整读取；已停止保存。')
     const entries = tree.tree.filter((e: any) => e.type === 'blob' && e.path.startsWith('annotations/'))
     const shards: { path: string; data: any }[] = []
@@ -43,6 +52,7 @@ export class GitHubComments {
     for (const entry of entries) {
       if (!/^annotations\/\d{4}\/\d{2}\/\d{2}\/[A-Za-z0-9-]+\/part-\d{6}\.json$/.test(entry.path)) throw new Error('评论库含未知记录布局，已停止读取。')
       const blob = await this.request(`git/blobs/${entry.sha}`)
+      this.#assertActive()
       if (blob.encoding !== 'base64') throw new Error('评论文件编码不受支持。')
       const data = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(blob.content.replace(/\s/g, '')), c => c.charCodeAt(0))))
       const expected = `annotations/${data.date?.replaceAll('-', '/')}/${data.documentId}/part-${String(data.part).padStart(6, '0')}.json`
@@ -65,6 +75,7 @@ export class GitHubComments {
     const date = operationDate(record.at)
     for (let attempt = 0; attempt < 3; attempt++) {
       const state = await this.read()
+      this.#assertActive()
       const previous = state.records.find(r => r.requestId === record.requestId)
       if (previous) {
         if (previous.payloadDigest !== record.payloadDigest) throw new Error('同一请求的内容发生变化，请保留草稿并重新提交。')
@@ -72,12 +83,17 @@ export class GitHubComments {
       }
       if (state.threads.some(t => t.id === record.threadId)) throw new Error('讨论 ID 冲突。')
       await validateTarget()
+      this.#assertActive()
       const shard = shardFor(record.payload.documentId, date, state.shards, record)
       const blob = await this.request('git/blobs', 'POST', { content: JSON.stringify(shard.data, null, 2) + '\n', encoding: 'utf-8' })
+      this.#assertActive()
       const tree = await this.request('git/trees', 'POST', { base_tree: state.tree, tree: [{ path: shard.path, mode: '100644', type: 'blob', sha: blob.sha }] })
+      this.#assertActive()
       const commit = await this.request('git/commits', 'POST', { message: `Add comment ${record.requestId}`, tree: tree.sha, parents: [state.head] })
+      this.#assertActive()
       try {
         await this.request(`git/refs/heads/${safePath(this.branch)}`, 'PATCH', { sha: commit.sha, force: false })
+        this.#assertActive()
         return { head: commit.sha, threads: replay([...state.records, record]) }
       } catch (cause) {
         if (!(cause instanceof GitHubError) || ![409, 422].includes(cause.status)) throw cause
@@ -88,7 +104,7 @@ export class GitHubComments {
     }
     throw new Error('评论保存遇到并发更新，请重试；草稿已保留。')
   }
-  disconnect() { this.#abort.abort(); this.#token = '' }
+  disconnect() { this.#disconnected = true; this.#abort.abort(); this.#token = '' }
 }
 export async function newComment(documentId: string, docsCommit: string, anchor: any, body: string): Promise<Operation> {
   const payload = { documentId, docsCommit, expectedContentRevision: anchor.contentRevision, anchor, commentId: crypto.randomUUID(), body }

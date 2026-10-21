@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { GitHubComments, newComment } from './github-comments'
+import { runCommentSessionStep } from './comment-session'
 import { createAnchor, normalizeText, validateAnchor, type Anchor, type Operation, type Thread } from './comment-model'
-const props = defineProps<{ doc: any; article: HTMLElement | null; docsCommit: string; loadSnapshot: (doc: any) => Promise<any>; localMode: boolean }>()
-const repository = ref('')
-const branch = ref('main')
-const token = ref('')
+const props = defineProps<{ doc: any; article: HTMLElement | null; docsCommit: string; docsRepository: string; loadSnapshot: (doc: any) => Promise<any>; localMode: boolean; sharedToken: string; repository: string; branch: string; sessionKey: string }>()
 const connected = ref(false)
 const busy = ref(false)
 const emit = defineEmits<{ busy: [value: boolean] }>()
@@ -25,6 +23,7 @@ let client: GitHubComments | null = null
 let session = 0
 let pending: Operation | null = null
 const drafts = new Map<string, { quote: typeof quote.value; body: string; pending: Operation | null; composer: boolean }>()
+function draftKey(doc = props.doc) { return [props.repository, props.branch, props.docsRepository, props.docsCommit, doc?.documentId, doc?.contentRevision].join('|') }
 const currentThreads = computed(() => threads.value.filter(t => t.documentId === props.doc?.documentId).sort((a, b) => Number(attached(a)) - Number(attached(b))))
 function attached(thread: Thread) { return thread.binding?.contentRevision === props.doc?.contentRevision && !!props.article?.querySelector(`[data-comment-block="${CSS.escape(thread.binding.blockId)}"]`) }
 function captureSelection() {
@@ -75,11 +74,13 @@ async function connect() {
   client?.disconnect(); client = null; connected.value = false; threads.value = []; head.value = ''
   busy.value = true; error.value = ''
   try {
-    const reader = new GitHubComments(repository.value.trim(), branch.value.trim(), token.value)
-    client = reader; token.value = ''
+    if (!props.sharedToken) throw new Error('请先连接资料库。')
+    const reader = new GitHubComments(props.repository, props.branch, props.sharedToken)
+    client = reader
     await reader.connect()
+    if (own !== session || client !== reader) { reader.disconnect(); return }
     const state = await reader.read()
-    if (own !== session) return
+    if (own !== session || client !== reader) { reader.disconnect(); return }
     threads.value = state.threads; head.value = state.head; connected.value = true
   } catch (cause) {
     if (own !== session) return
@@ -89,10 +90,12 @@ async function connect() {
 }
 async function refresh() {
   const own = session
+  const reader = client
+  if (!reader) return
   busy.value = true; error.value = ''
   try {
-    const state = await client!.read()
-    if (own !== session) return
+    const state = await reader.read()
+    if (own !== session || client !== reader) return
     threads.value = state.threads; head.value = state.head
   } catch (cause) { if (own === session) error.value = cause instanceof Error ? cause.message : '评论读取失败。' }
   finally { if (own === session) busy.value = false }
@@ -100,41 +103,50 @@ async function refresh() {
 async function save() {
   if (!client || !quote.value || !body.value.trim() || props.localMode) return
   const own = session
+  const reader = client
   const doc = props.doc
+  const saveKey = draftKey(doc)
   const target = quote.value
   busy.value = true; error.value = ''; status.value = ''
+  const assertCurrent = () => { if (own !== session || client !== reader || draftKey() !== saveKey) throw new Error('评论会话或文档版本已切换，请在当前会话中重试；草稿已保留。') }
   try {
-    const snapshot = await props.loadSnapshot(doc)
-    const anchor = await createAnchor(snapshot, doc, target.blockId, target.text, target.range)
+    const snapshot = await runCommentSessionStep(assertCurrent, () => props.loadSnapshot(doc))
+    const anchor = await runCommentSessionStep(assertCurrent, () => createAnchor(snapshot, doc, target.blockId, target.text, target.range))
     if (pending && (pending.payload.body !== body.value.trim() || JSON.stringify(pending.payload.anchor) !== JSON.stringify(anchor))) throw new Error('上次提交结果尚未确认，请先以原内容重试，确认后再新建评论。')
-    if (!pending) pending = await newComment(doc.documentId, props.docsCommit, anchor, body.value.trim())
-    const result = await client.create(pending, async () => {
-      const current = await props.loadSnapshot(doc)
-      await validateAnchor(current, doc, anchor)
-    })
-    if (own !== session) return
+    const record = pending || await runCommentSessionStep(assertCurrent, () => newComment(doc.documentId, props.docsCommit, anchor, body.value.trim()))
+    pending = record
+    const result = await runCommentSessionStep(assertCurrent, () => reader.create(record, async () => {
+      const current = await runCommentSessionStep(assertCurrent, () => props.loadSnapshot(doc))
+      await runCommentSessionStep(assertCurrent, () => validateAnchor(current, doc, anchor))
+    }))
     threads.value = result.threads; head.value = result.head
     closeComposer(); status.value = '已保存到私有评论库'
-  } catch (cause) { if (own === session) error.value = cause instanceof Error ? cause.message : '评论保存失败，草稿已保留，请重试。' }
+  } catch (cause) { if (own === session && draftKey() === saveKey) error.value = cause instanceof Error ? cause.message : '评论保存失败，草稿已保留，请重试。' }
   finally { if (own === session) busy.value = false }
 }
 function jump(thread: Thread) {
   if (!attached(thread)) return
   props.article?.querySelector(`[data-comment-block="${CSS.escape(thread.binding!.blockId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
-watch(() => props.doc?.documentId, (id, old) => {
+watch(() => draftKey(), (key, old) => {
   if (old) drafts.set(old, { quote: quote.value, body: body.value, pending, composer: composer.value })
-  const draft = drafts.get(id)
+  const draft = drafts.get(key)
   quote.value = draft?.quote || null; body.value = draft?.body || ''; pending = draft?.pending || null; composer.value = draft?.composer || false
   selectedParagraph.value = null; visible.value = 20; error.value = ''; status.value = ''
 })
+watch(() => [props.sharedToken, props.repository, props.branch, props.sessionKey] as const, ([token, repository, branch]) => {
+  session++
+  client?.disconnect(); client = null; connected.value = false; threads.value = []; head.value = ''
+  if (token && repository && branch && !props.localMode) void connect()
+  else { busy.value = false; error.value = '' }
+}, { immediate: true })
 watch(() => props.article, () => { selectedParagraph.value = null; if (!composer.value) quote.value = null })
 onMounted(() => {
   document.addEventListener('selectionchange', captureSelection)
   document.addEventListener('pointerup', pointParagraph)
 })
 onBeforeUnmount(() => {
-  session++; emit('busy', false); client?.disconnect(); token.value = ''; drafts.clear(); threads.value = []; body.value = ''; pending = null
+  session++; emit('busy', false); client?.disconnect(); drafts.clear(); threads.value = []; body.value = ''; pending = null
   document.removeEventListener('selectionchange', captureSelection)
   document.removeEventListener('pointerup', pointParagraph)
 })
@@ -145,15 +157,11 @@ onBeforeUnmount(() => {
   <section ref="panel" class="comments-panel" aria-label="文档评论">
     <h2>文档评论</h2>
     <p class="hint">在普通正文段落内选词，点击“引用并评论”；点击段落也可整段评论。列表、表格、代码与跨公式选词暂不开放。</p>
-    <details v-if="!connected" :open="composer || undefined" class="comment-connection">
+    <details v-if="!connected" :open="composer || !!error || undefined" class="comment-connection">
       <summary>连接私有评论库以保存、查看评论</summary>
-      <form class="comment-form" @submit.prevent="connect">
-        <label>评论私库（owner/repo）<input v-model="repository" placeholder="owner/私有评论库" required :disabled="busy" /></label>
-        <label>分支<input v-model="branch" required :disabled="busy" /></label>
-        <label>评论库读写令牌<input v-model="token" type="password" autocomplete="off" placeholder="仅授权 comments 私库 Contents 读写权限" required :disabled="busy" /></label>
-        <button :disabled="busy">{{ busy ? '正在连接…' : '连接评论库' }}</button>
-      </form>
-      <p class="hint">请先创建并初始化私有 comments 仓库。令牌仅留在当前标签页内存，不需要正文库写权限。</p>
+      <p class="hint">评论库：{{ repository }} · {{ branch }}；使用当前资料库会话中的同一 PAT。</p>
+      <button type="button" :disabled="busy || !sharedToken" @click="connect">{{ busy ? '正在连接…' : '重新连接评论库' }}</button>
+      <p v-if="!sharedToken" class="hint">请先连接资料库；PAT 需同时拥有 docs 与 comments 两个私库的 Contents 读写权限。</p>
     </details>
     <form v-if="composer && quote" class="comment-composer" @submit.prevent="save">
       <strong>{{ quote.range ? '引用评论' : '整段评论' }}</strong><blockquote>{{ quote.exact }}</blockquote>

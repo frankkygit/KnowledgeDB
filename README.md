@@ -6,7 +6,7 @@ arXiv 源码辅助翻译流程见 [kb-arxiv-latex-translate](skills/local/kb-arx
 
 论文默认先展示技术概述，通过链接在阅读区渲染中文翻译 Markdown；采用左侧列表、右侧内容布局，并支持正文检索。
 
-当前交付为基础目录、可本地运行的阅读器、GitHub Pages 发布流程、方案、模板与入库技能。已接通私有 docs 只读加载、概述/翻译渲染与索引检索；段落评论读写仍待实现；检索与翻译由用户手动触发。
+当前交付为基础目录、可本地运行的阅读器、GitHub Pages 发布流程、方案、模板与入库技能。已接通私有 docs 加载、概述/翻译渲染、索引检索与评论读写；检索与翻译由用户手动触发。
 
 - [论文展示与检索规范](docs/paper-reading.md)：左侧列表、右侧默认概述、翻译 Markdown 链接渲染与全文检索。
 - [知识库构建执行方案](docs/execution-plan.md)：第一版范围、架构、实施顺序和验收用例。
@@ -141,6 +141,6 @@ codex mcp list
 
 ## 线上私库阅读
 
-站点：https://frankkygit.github.io/KnowledgeDB/ 。打开后，在“连接资料库”中填写仅授权 KnowledgeDB-docs、Contents 只读的 fine-grained GitHub 访问令牌。令牌只在标签页内存使用，不要提交 Git 或发到聊天。SSH 配置不代替网页 API 令牌。
+站点：https://frankkygit.github.io/KnowledgeDB/ 。打开后，在“连接资料库”中填写一个 fine-grained GitHub PAT，同时授权 KnowledgeDB-docs 与 KnowledgeDB-comments 的 Contents 读写权限。令牌只在标签页内存使用，不要提交 Git 或发到聊天。SSH 配置不代替网页 API 令牌。
 
 连接后默认显示论文概述，点击“翻译”渲染对应 Markdown，支持正文索引检索和图片/公式。当前评论功能尚未接入。更新 docs 后同步 gitlink、release-manifest 和 site/public/reader-config.json 的 commit，再推送主库。
