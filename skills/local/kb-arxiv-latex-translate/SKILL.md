@@ -9,6 +9,22 @@ description: 从用户给定的 arXiv 链接下载同版本原 PDF 与 LaTeX 源
 
 先读项目 `AGENTS.md`、`docs/local-workspace.md`；入库时另读 `skills/local/kb-paper-ingest/SKILL.md`（已有论文使用 `kb-content-update`）和 `docs/deployment.md`、`docs/data-contract.md`、`docs/paper-reading.md`。
 
+## 阶段模型与交接
+
+本技能由主 Agent 编排，并将下列阶段委派给指定模型的子 Agent；此约定仅适用于本技能及其本次入库/更新交接，不改变其他任务的默认模型。用户当次明确指定模型或范围时，以用户要求为准。
+
+| 阶段 | 模型 | 推理强度 | 任务边界 |
+| --- | --- | --- | --- |
+| 论文翻译与译文修正 | `gpt-6-luna` | `medium` | 按第 3、4 节调用 nature-reader，结合固定版本 PDF、源码与原图生成并核验阅读版 |
+| 论文概述/解读 | `gpt-6.1-sol` | `medium` | 按入库技能与论文概述模板生成 analysis.md 草稿，区分文献事实与 Agent 分析；结合原文核验，不仅依赖译文 |
+| 私有 docs 格式适配与入库整理 | `gpt-6-luna` | `medium` | 按 kb-paper-ingest 或 kb-content-update 整理已完成的翻译与概述、资源链接、元数据、稳定 ID、快照及索引 |
+
+- 创建上述子 Agent 时显式传入 `model` 与 `reasoning_effort="medium"`；使用支持模型覆盖的独立上下文（当前工具为 `fork_turns="none"`），在任务中提供本技能路径、所需入库技能路径、精确来源版本、输入/输出绝对路径、用户范围和已完成产物。不能仅在提示词中写模型名称而省略实际调用参数。
+- 翻译先完成本地归档与核验；需要生成或更新概述时，再交给概述子 Agent；最后由格式适配子 Agent 接收入库。明确仅翻译或仅本地时，不额外生成入库概述或执行发布。已有概述无需更新时按更新技能保留。
+- 入库交接显式传入已生成概述，避免 kb-paper-ingest 的默认概述步骤重复生成。格式适配阶段不重译正文、不重新撰写概述；发现实质性内容问题时交回对应阶段修正。人工修改、个人笔记与评论的保护继续遵循原有规则。
+- 子 Agent 返回产物路径、核验结果及待核对项；在本次 `translation_notes.md` 记录各阶段实际使用的模型与推理强度，未执行的阶段不记为已完成。主 Agent 负责交接审阅及后续发布核验。
+- 指定模型、推理强度或子 Agent 工具不可用时，保留已完成产物并报告具体缺项；未经用户接受，不静默改用其他模型或由主 Agent 代做受指定模型约束的阶段。
+
 ## 1. 固定论文与来源
 
 - 接受 arXiv abs/pdf/html/src 链接或明确 ID，支持现代 ID 和旧式分类/编号。校验输入，不直接把未校验 URL 或 ID 拼入命令或路径。
