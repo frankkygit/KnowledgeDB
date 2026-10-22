@@ -46,6 +46,10 @@ const editorSourceDocumentId = ref<string | null>(null)
 const editorDocumentId = ref('')
 const tabDraftId = ref('')
 const draftScopeReady = ref(false)
+const directoryReady = ref(false)
+const directoryLoading = ref(false)
+const directoryError = ref('')
+const validDocsHead = (value: string) => /^[a-f0-9]{40}$/i.test(value)
 const currentDraftId = ref('')
 const recoveryDrafts = ref<OfflineNoteDraft[]>([])
 const draftStorageState = ref<'idle' | 'saving' | 'saved' | 'error' | 'unavailable'>('idle')
@@ -63,6 +67,11 @@ const isLocalStore = computed(() => props.store.kind === 'local-demo')
 const isDraggingImage = ref(false)
 let editSession = 0
 let loadSession = 0
+let directorySession = 0
+let editorStore: NotesStore | null = null
+let activeDraftNamespace = ''
+let activeDraftTabId = ''
+let componentMounted = false
 let lastSelection = { start: 0, end: 0, scrollTop: 0 }
 let imageInsertionTail = Promise.resolve()
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -96,11 +105,16 @@ const shownTags = computed(() => {
 const visible = computed(() => baseFilteredNotes.value.filter(note => !tagFilter.value.length || tagFilter.value.some(tag => (note.tags || []).includes(tag))).sort((a, b) => b.updated.localeCompare(a.updated)))
 
 async function refresh(keepSelection = true) {
-  const data = await props.store.list()
+  const store = props.store
+  const session = directorySession
+  const data = await store.list()
+  if (!componentMounted || store !== props.store || session !== directorySession) return
   notes.value = data.notes
   head.value = data.head
+  directoryReady.value = validDocsHead(data.head)
+  directoryError.value = directoryReady.value ? '' : '笔记目录暂未加载完成，请重试。'
   if (!keepSelection || !notes.value.some(note => note.documentId === selectedId.value)) selectedId.value = ''
-  if (selectedId.value) await openNote(selectedId.value)
+  if (selectedId.value && !editing.value) await openNote(selectedId.value)
 }
 async function openNote(id: string, discardConfirmed = false) {
   if (dirty.value && !discardConfirmed) { requestDiscard(() => openNote(id, true)); return }
@@ -109,8 +123,9 @@ async function openNote(id: string, discardConfirmed = false) {
   editing.value = false; creating.value = false; previewMode.value = false
   selectedId.value = id
   const session = ++loadSession
-  const data = await props.store.get(id)
-  if (session !== loadSession || selectedId.value !== id) return
+  const store = props.store, directory = directorySession
+  const data = await store.get(id)
+  if (!componentMounted || store !== props.store || directory !== directorySession || session !== loadSession || selectedId.value !== id) return
   selected.value = data.note
   markdown.value = data.markdown
   head.value = data.head
@@ -235,10 +250,17 @@ watch([selectedForDeletion, visible], () => nextTick(() => {
   if (selectAllCheckbox.value) selectAllCheckbox.value.indeterminate = visible.value.some(note => selectedForDeletion.value.includes(note.documentId)) && !visible.value.every(note => selectedForDeletion.value.includes(note.documentId))
 }), { flush: 'post' })
 function beginEdit(create = false, discardConfirmed = false) {
+  if (!draftScopeReady.value || !directoryReady.value || !validDocsHead(head.value)) {
+    error.value = directoryError.value || '笔记目录暂未加载完成，请重试。'
+    return
+  }
   if (dirty.value && !discardConfirmed) { requestDiscard(() => beginEdit(create, true)); return }
   if (editing.value) void clearActiveDraft()
   error.value = ''; message.value = ''; creating.value = create; editing.value = true; previewMode.value = false; editSession++
   editorBaseHead.value = head.value
+  editorStore = props.store
+  activeDraftNamespace = props.store.namespace
+  activeDraftTabId = tabDraftId.value
   editorSourceDocumentId.value = create ? null : selected.value?.documentId || selectedId.value || null
   editorDocumentId.value = create ? `note-${crypto.randomUUID()}` : editorSourceDocumentId.value || ''
   currentDraftId.value = create ? `${tabDraftId.value}:new:${crypto.randomUUID()}` : `${tabDraftId.value}:note:${selected.value?.documentId || selectedId.value}`
@@ -386,15 +408,29 @@ function togglePreview() {
 }
 async function save() {
   if (busy.value) return
+  if (!draftScopeReady.value || !directoryReady.value || !validDocsHead(editorBaseHead.value) || editorStore !== props.store) {
+    error.value = editorSourceDocumentId.value && !validDocsHead(editorBaseHead.value)
+      ? '无法确认这份草稿的原始版本，已保留内容；请先下载，避免覆盖线上修改。'
+      : '草稿无法确认线上版本；笔记目录暂未加载完成，请重试。'
+    if (creating.value && !editorBaseHead.value) message.value = '当前输入仍保留；可先下载，刷新目录后再新建。'
+    return
+  }
   busy.value = true; error.value = ''; message.value = ''
+  const store = editorStore
+  const storeSession = directorySession
+  const session = editSession
+  const baseHead = editorBaseHead.value
   try {
     let currentInsertions: Promise<void>
     do { currentInsertions = imageInsertionTail; await currentInsertions } while (currentInsertions !== imageInsertionTail)
+    if (!componentMounted || !store || store !== props.store || storeSession !== directorySession || session !== editSession || baseHead !== editorBaseHead.value) throw new Error('笔记目录或存储已切换；当前草稿仍保留，请刷新后重新编辑。')
     const payload = { documentId: editorDocumentId.value, sourceDocumentId: editorSourceDocumentId.value, sourceKind: selected.value?.sourceKind || 'personal', title: title.value, tags: tagsText.value.split(',').map(value => value.trim()).filter(Boolean), status: status.value, markdown: editMarkdown.value, assets: pendingAssets.value, sources: selected.value?.sources || [] }
     const signature = JSON.stringify(payload)
     if (!pendingRequest.value || pendingRequest.value.signature !== signature) pendingRequest.value = { signature, id: crypto.randomUUID() }
     await persistActiveDraft()
-    const data = await props.store.save(payload, editorBaseHead.value, pendingRequest.value.id)
+    if (!componentMounted || store !== props.store || storeSession !== directorySession || session !== editSession) throw new Error('笔记目录或存储已切换；当前草稿仍保留，请刷新后重新编辑。')
+    const data = await store.save(payload, baseHead, pendingRequest.value.id)
+    if (!componentMounted || store !== props.store || storeSession !== directorySession || session !== editSession) return
     head.value = data.head
     await clearActiveDraft()
     const savedStatus = payload.status === 'draft' ? '草稿' : '正式'
@@ -404,8 +440,9 @@ async function save() {
     sourceFilter.value = nextFilters.source; statusFilter.value = nextFilters.status; tagFilter.value = nextFilters.tags; search.value = nextFilters.search
     pendingRequest.value = null; pendingAssets.value = []; editing.value = false; creating.value = false
     await refresh(false); await openNote(data.note.documentId)
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存失败。输入仍保留在编辑器中。' }
-  finally { busy.value = false }
+  } catch (cause) {
+    if (componentMounted && store === props.store && storeSession === directorySession && session === editSession) error.value = cause instanceof Error ? cause.message : '保存失败。输入仍保留在编辑器中。'
+  } finally { if (store === props.store && storeSession === directorySession && session === editSession) busy.value = false }
 }
 function toggleTag(tag: string) { tagFilter.value = tagFilter.value.includes(tag) ? tagFilter.value.filter(item => item !== tag) : [...tagFilter.value, tag] }
 function clearFilters() { sourceFilter.value = 'all'; statusFilter.value = 'all'; tagFilter.value = []; search.value = '' }
@@ -415,10 +452,10 @@ function safeSourceUrl(value: unknown) {
   try { const url = new URL(value); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '' } catch { return '' }
 }
 function currentOfflineDraft(): OfflineNoteDraft | null {
-  if (!editing.value || !currentDraftId.value || !tabDraftId.value) return null
+  if (!editing.value || !currentDraftId.value || !(activeDraftTabId || tabDraftId.value)) return null
   return {
     id: currentDraftId.value,
-    tabId: tabDraftId.value,
+    tabId: activeDraftTabId || tabDraftId.value,
     documentId: editorDocumentId.value,
     sourceDocumentId: editorSourceDocumentId.value,
     sourceKind: selected.value?.sourceKind || (editorSourceDocumentId.value ? notes.value.find(note => note.documentId === editorSourceDocumentId.value)?.sourceKind || 'personal' : 'personal'),
@@ -436,12 +473,13 @@ function currentOfflineDraft(): OfflineNoteDraft | null {
 async function persistActiveDraft() {
   const draft = currentOfflineDraft()
   if (!draft) return
+  const namespace = activeDraftNamespace || props.store.namespace
   const revision = ++draftRevision
   const serialized = JSON.stringify(draft)
   if (serialized === lastDraftSerialized) return
   draftStorageState.value = 'saving'; draftStorageMessage.value = ''
   draftSaveTail = draftSaveTail.then(async () => {
-    await saveOfflineNoteDraft(draft, props.store.namespace)
+    await saveOfflineNoteDraft(draft, namespace)
     lastDraftSerialized = serialized
     if (revision === draftRevision) {
       draftStorageState.value = 'saved'; draftSavedAt.value = draft.updatedAt
@@ -467,10 +505,12 @@ async function clearActiveDraft() {
   if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }
   const id = currentDraftId.value
   if (!id) return
+  const namespace = activeDraftNamespace || props.store.namespace
+  const tabId = activeDraftTabId || tabDraftId.value
   currentDraftId.value = ''
   try {
     await draftSaveTail
-    await deleteOfflineNoteDraft(id, tabDraftId.value, props.store.namespace)
+    await deleteOfflineNoteDraft(id, tabId, namespace)
     recoveryDrafts.value = recoveryDrafts.value.filter(draft => draft.id !== id)
     lastDraftSerialized = ''
     if (!currentDraftId.value) { draftStorageState.value = 'idle'; draftStorageMessage.value = '' }
@@ -488,17 +528,37 @@ async function discardRecoveredDraft(draft: OfflineNoteDraft) {
 }
 async function restoreDraft(draft: OfflineNoteDraft) {
   if (editing.value) { error.value = '请先保存或结束当前编辑，再恢复另一份本机草稿。'; return }
+  if (!draftScopeReady.value || !directoryReady.value || !validDocsHead(head.value)) { error.value = directoryError.value || '目录尚未就绪，暂不能恢复草稿。'; return }
+  const store = props.store, session = directorySession, namespace = store.namespace, restoringTabId = tabDraftId.value
+  const restoreSession = editSession
   error.value = ''; message.value = ''
   let claimed: OfflineNoteDraft
-  try { claimed = await claimOfflineNoteDraft(draft.id, tabDraftId.value, props.store.namespace) }
+  try { claimed = await claimOfflineNoteDraft(draft.id, restoringTabId, namespace) }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '无法独占恢复这份草稿。'; return }
+  if (!componentMounted || store !== props.store || session !== directorySession || editSession !== restoreSession || editing.value) return
+  const validHead = validDocsHead(claimed.baseHead)
+  const occupiedDraftId = !claimed.sourceDocumentId && !validHead && notes.value.some(note => note.documentId === claimed.documentId)
   if (claimed.sourceDocumentId) {
-    try { await openNote(claimed.sourceDocumentId, true) }
+    const opening = openNote(claimed.sourceDocumentId, true)
+    const expectedEditSession = editSession
+    try { await opening }
     catch (cause) { error.value = cause instanceof Error ? cause.message : '原笔记读取失败；草稿已保留，不能按新笔记保存。'; return }
+    if (editSession !== expectedEditSession || editing.value) return
   } else { selected.value = null; selectedId.value = '' }
+  if (!componentMounted || store !== props.store || session !== directorySession || (!claimed.sourceDocumentId && (editSession !== restoreSession || editing.value))) return
+  if (!claimed.sourceDocumentId && !validHead && !occupiedDraftId) {
+    claimed = { ...claimed, baseHead: head.value }
+    try { await saveOfflineNoteDraft(claimed, namespace) }
+    catch (cause) {
+      error.value = `草稿正文仍保留在恢复编辑器中，但无法更新本机 HEAD 基线，请下载保存：${cause instanceof Error ? cause.message : '本机保存失败。'}`
+    }
+    if (!componentMounted || store !== props.store || session !== directorySession || editSession !== restoreSession || editing.value) return
+  }
   creating.value = !claimed.sourceDocumentId
   editing.value = true; previewMode.value = false; editSession++
+  editorStore = props.store
   currentDraftId.value = claimed.id; editorBaseHead.value = claimed.baseHead; editorSourceDocumentId.value = claimed.sourceDocumentId; editorDocumentId.value = claimed.documentId || claimed.sourceDocumentId || `note-${crypto.randomUUID()}`
+  activeDraftNamespace = namespace; activeDraftTabId = restoringTabId
   title.value = claimed.title; tagsText.value = claimed.tags.join(', '); status.value = claimed.status
   editMarkdown.value = claimed.markdown; pendingAssets.value = claimed.assets.map(asset => ({ ...asset }))
   pendingRequest.value = claimed.pendingRequestId && claimed.pendingRequestSignature
@@ -508,38 +568,64 @@ async function restoreDraft(draft: OfflineNoteDraft) {
   lastDraftSerialized = ''
   draftStorageState.value = 'saved'; draftSavedAt.value = claimed.updatedAt
   recoveryDrafts.value = recoveryDrafts.value.filter(item => item.id !== claimed.id)
+  if (occupiedDraftId) error.value = '这份新建草稿与现有笔记发生冲突；正文已恢复，可先下载，再新建另一篇笔记。'
+  else if (claimed.sourceDocumentId && !validHead) error.value = '无法确认这份草稿的原始版本，已保留内容；请先下载，避免覆盖线上修改。'
 }
 async function refreshRecoveryDrafts() {
   if (!tabDraftId.value || recoveryRefreshing.value) return
+  const store = props.store, session = directorySession, namespace = store.namespace
   recoveryRefreshing.value = true
   try {
-    const [allDrafts, activeTabs] = await Promise.all([listOfflineNoteDrafts(props.store.namespace), listActiveDraftTabIds(props.store.namespace)])
+    const [allDrafts, activeTabs] = await Promise.all([listOfflineNoteDrafts(namespace), listActiveDraftTabIds(namespace)])
+    if (!componentMounted || store !== props.store || session !== directorySession) return
     recoveryDrafts.value = allDrafts.filter(draft => draft.id !== currentDraftId.value && (draft.tabId === tabDraftId.value || !activeTabs.has(draft.tabId)))
     if (!editing.value && recoveryDrafts.value.length) draftStorageState.value = 'saved'
   } catch (cause) {
+    if (!componentMounted || store !== props.store || session !== directorySession) return
     draftStorageMessage.value = cause instanceof Error ? cause.message : '无法读取本机草稿；当前编辑仍可继续。'
   } finally { recoveryRefreshing.value = false }
 }
 async function findRecoveryDrafts() {
+  const store = props.store
+  const session = directorySession
   try {
-    tabDraftId.value = await resolveDraftTabId(props.store.namespace)
-    await writeDraftTabLease(tabDraftId.value, props.store.namespace)
+    const namespace = store.namespace
+    const resolvedTabId = await resolveDraftTabId(namespace)
+    if (!componentMounted || store !== props.store || session !== directorySession) return
+    tabDraftId.value = resolvedTabId
+    await writeDraftTabLease(resolvedTabId, namespace)
+    if (!componentMounted || store !== props.store || session !== directorySession) return
     if (tabDraftId.value.startsWith('memory-')) draftStorageWarning.value = '浏览器不允许保存标签页识别信息；草稿仍保存在本机，但关闭后恢复可能需要等待其他标签页租约过期。'
     await refreshRecoveryDrafts()
+    if (!componentMounted || store !== props.store || session !== directorySession) return
     draftLeaseTimer = setInterval(() => {
       if (!tabDraftId.value) return
-      void writeDraftTabLease(tabDraftId.value, props.store.namespace).then(refreshRecoveryDrafts).catch(() => {})
+      void writeDraftTabLease(tabDraftId.value, namespace).then(refreshRecoveryDrafts).catch(() => {})
     }, 15_000)
   } catch (cause) {
+    if (!componentMounted || store !== props.store || session !== directorySession) return
     draftStorageState.value = 'unavailable'
     draftStorageMessage.value = cause instanceof Error ? cause.message : '无法读取本机草稿；当前编辑仍可继续。'
-  } finally { draftScopeReady.value = true }
+  } finally { if (componentMounted && store === props.store && session === directorySession) draftScopeReady.value = true }
 }
 function refreshRecoveredDraftsOnReturn() { void refreshRecoveryDrafts() }
-onMounted(async () => {
-  await findRecoveryDrafts()
-  try { await refresh(false) } catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取离线笔记。' }
-})
+async function initialize(retry = false) {
+  const session = ++directorySession
+  const store = props.store
+  directoryReady.value = false; directoryLoading.value = true; directoryError.value = ''
+  if (!retry) { draftScopeReady.value = false; if (draftLeaseTimer) { clearInterval(draftLeaseTimer); draftLeaseTimer = null } }
+  if (!retry) await findRecoveryDrafts()
+  if (!componentMounted || store !== props.store || session !== directorySession) return
+  try { await refresh(retry) }
+  catch (cause) {
+    if (componentMounted && store === props.store && session === directorySession) {
+      directoryError.value = '笔记目录暂未加载完成，请重试。'
+      error.value = directoryError.value
+    }
+  } finally { if (componentMounted && store === props.store && session === directorySession) directoryLoading.value = false }
+}
+onMounted(() => { componentMounted = true; void initialize() })
+watch(() => props.store, () => { editSession++; busy.value = false; void initialize() })
 watch([editing, title, tagsText, status, editMarkdown, pendingAssets, editorBaseHead], scheduleDraftSave)
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
@@ -549,7 +635,7 @@ onMounted(() => {
   window.addEventListener('pageshow', refreshRecoveredDraftsOnReturn)
 })
 function persistBeforePageHide() { void persistActiveDraft(); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace) }
-onBeforeUnmount(() => { editSession++; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
+onBeforeUnmount(() => { componentMounted = false; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
 onBeforeUnmount(() => { objectUrls.forEach(url => URL.revokeObjectURL(url)) })
 defineExpose({ hasUnsavedChanges: () => dirty.value, confirmLeave })
 watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previewMode], async () => {
@@ -577,7 +663,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
     <aside class="notes-sidebar" :aria-hidden="noteSidebarCollapsed">
       <nav class="section-tabs note-section-tabs" aria-label="内容分类"><button type="button" :disabled="busy" @click="emit('select-section', 'papers')">论文</button><button type="button" class="active" aria-current="page">笔记</button><button type="button" :disabled="busy" @click="emit('select-section', 'topics')">专题</button></nav>
       <label class="notes-search"><span>搜索笔记</span><div class="notes-search-field"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input v-model="search" type="search" placeholder="搜索标题与正文" :disabled="busy || deleteDialog" /></div></label>
-      <button type="button" class="new-note-button" title="新建笔记" :disabled="busy || !draftScopeReady" @click="beginEdit(true)"><span aria-hidden="true">＋</span> 新建笔记</button>
+      <button type="button" class="new-note-button" title="新建笔记" :disabled="busy || !draftScopeReady || !directoryReady" @click="beginEdit(true)"><span aria-hidden="true">＋</span> 新建笔记</button>
       <div class="note-filter-group"><span>来源</span><div><button v-for="item in [{ id: 'all', label: '全部' }, { id: 'blog', label: 'Blog' }, { id: 'personal', label: '个人' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: sourceFilter === item.id }" @click="sourceFilter = item.id">{{ item.label }}</button></div></div>
       <div class="note-filter-group"><span>状态</span><div><button v-for="item in [{ id: 'published', label: '正式' }, { id: 'draft', label: '草稿' }, { id: 'all', label: '全部' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: statusFilter === item.id }" @click="statusFilter = item.id">{{ item.label }}</button></div></div>
       <div class="note-filter-group tag-filters"><div class="tag-header"><span>标签（任意匹配）</span><button v-if="allTags.length > 6" type="button" :disabled="busy || deleteDialog" class="tag-expand-button" :aria-label="tagsExpanded ? '收起标签' : '展开全部标签'" :aria-expanded="tagsExpanded" :title="tagsExpanded ? '收起标签' : '展开全部标签'" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '收起' : '展开' }} <svg viewBox="0 0 16 16" :class="{ rotated: tagsExpanded }"><path d="m4 6 4 4 4-4" /></svg></button></div><div class="tag-chips" :class="{ 'is-expanded': tagsExpanded }"><button v-for="tag in shownTags" :key="tag" type="button" :disabled="busy || deleteDialog" :title="`当前来源、状态和搜索结果中有 ${tagCounts.find(([name]) => name === tag)?.[1] || 0} 篇笔记使用此标签；同一篇只计一次`" :class="{ active: tagFilter.includes(tag) }" @click="toggleTag(tag)">{{ tag }} <small>({{ tagCounts.find(([name]) => name === tag)?.[1] || 0 }})</small></button><small v-if="!allTags.length">暂无标签</small></div><small v-if="allTags.length" class="tag-count-hint">计数按当前来源、状态和搜索统计，不受标签筛选影响；已选多个标签时匹配任意一个</small></div>
@@ -586,7 +672,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
       <nav class="note-list" aria-label="笔记列表"><div v-for="note in visible" :key="note.documentId" class="note-list-row" :class="{ selected: selectedId === note.documentId, 'is-checked': selectedForDeletion.includes(note.documentId) }"><input v-if="multiSelect" type="checkbox" :aria-label="`选择笔记：${note.title}`" :checked="selectedForDeletion.includes(note.documentId)" :disabled="busy" @change="toggleDeleteSelection(note.documentId)" /><button class="note-row-open" type="button" :disabled="busy" :title="note.title" @click="multiSelect ? toggleDeleteSelection(note.documentId) : openNote(note.documentId)"><strong>{{ note.title }}</strong><small>{{ note.sourceKind === 'blog' ? 'Blog' : '个人' }} · {{ note.tags.slice(0, 2).join(' · ') || (note.status === 'draft' ? '草稿' : '正式') }}</small><time>{{ date(note.updated) }}</time></button><div v-if="!multiSelect" class="note-row-menu"><button type="button" class="note-row-menu-trigger" :aria-label="`笔记操作：${note.title}`" :aria-expanded="rowMenuId === note.documentId" :disabled="busy" @click.stop="rowMenuId = rowMenuId === note.documentId ? '' : note.documentId">⋯</button><div v-if="rowMenuId === note.documentId" class="note-row-menu-popup"><button type="button" :disabled="busy" @click="requestDelete([note.documentId], $event.currentTarget as HTMLElement)">删除笔记</button></div></div></div><p v-if="!visible.length" class="hint">没有匹配的笔记。</p></nav>
       <p class="notes-private-hint">ⓘ 私人内容仅在授权后加载</p>
     </aside>
-    <nav v-if="noteSidebarCollapsed" class="notes-rail" aria-label="笔记快捷操作"><button type="button" :disabled="busy" title="论文" aria-label="论文" @click="emit('select-section', 'papers')"><svg viewBox="0 0 24 24"><path d="M5 4.5h10.5A3.5 3.5 0 0 1 19 8v11H8a3 3 0 0 1-3-3zM8 19v-3h11M8 8h7M8 11h7"/></svg></button><button type="button" class="active" title="笔记" aria-label="笔记"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></svg></button><button type="button" :disabled="busy" title="专题" aria-label="专题" @click="emit('select-section', 'topics')"><svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4zM4 7V5h7l2 2"/></svg></button><button type="button" title="搜索笔记" aria-label="搜索笔记" @click="emit('toggle-sidebar')"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button><button type="button" :disabled="busy || !draftScopeReady" title="新建笔记" aria-label="新建笔记" @click="beginEdit(true)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></nav>
+    <nav v-if="noteSidebarCollapsed" class="notes-rail" aria-label="笔记快捷操作"><button type="button" :disabled="busy" title="论文" aria-label="论文" @click="emit('select-section', 'papers')"><svg viewBox="0 0 24 24"><path d="M5 4.5h10.5A3.5 3.5 0 0 1 19 8v11H8a3 3 0 0 1-3-3zM8 19v-3h11M8 8h7M8 11h7"/></svg></button><button type="button" class="active" title="笔记" aria-label="笔记"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></svg></button><button type="button" :disabled="busy" title="专题" aria-label="专题" @click="emit('select-section', 'topics')"><svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4zM4 7V5h7l2 2"/></svg></button><button type="button" title="搜索笔记" aria-label="搜索笔记" @click="emit('toggle-sidebar')"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button><button type="button" :disabled="busy || !draftScopeReady || !directoryReady" title="新建笔记" aria-label="新建笔记" @click="beginEdit(true)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></nav>
     <div class="notes-workspace">
     <header v-if="editing" class="notes-heading"><div class="notes-heading-actions"><span class="draft-storage-status" :class="`is-${draftStorageState}`">{{ draftStorageState === 'saving' ? '本机草稿保存中…' : draftStorageState === 'saved' ? `本机草稿已保存${draftSavedAt ? ` · ${date(draftSavedAt)}` : ''}` : draftStorageState === 'error' ? '本机草稿未保存' : draftStorageState === 'unavailable' ? '本机自动草稿不可用' : '本机草稿自动保存' }}</span><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-secondary preview-toggle" :disabled="busy" @click="togglePreview"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.8"/></svg>{{ previewMode ? '关闭预览' : '预览' }}</button><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !title.trim() || !editMarkdown.trim()" @click="save"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3 8 3.2 3.2L13 4.8"/></svg>{{ busy ? '正在保存…' : isLocalStore ? '保存到本地 Git' : '保存到 GitHub' }}</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div></header>
     <p v-if="head" class="notes-commit"><details><summary>{{ isLocalStore ? '本地保存详情' : 'GitHub 保存详情' }}</summary><code>{{ head }}</code></details></p>
@@ -594,6 +680,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
     <div v-if="deleteDialog" class="discard-backdrop" role="presentation" @keydown="handleDeleteKeydown"><section ref="deleteDialogRoot" class="delete-note-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1"><h2 id="delete-title">删除 {{ deleteIds.length }} 篇笔记？</h2><p>删除后将从笔记列表和搜索结果中移除，并提交到 {{ isLocalStore ? '本地 Git 演示库' : 'GitHub' }}。</p><small>历史版本保留在 Git 中。</small><ul><li v-for="id in deleteIds" :key="id">{{ notes.find(note => note.documentId === id)?.title || id }}</li></ul><p v-if="error" class="delete-dialog-error" role="alert">{{ error }}</p><div><button type="button" :disabled="deleteBusy" @click="deleteDialog = false; nextTick(restoreDeleteFocus)">取消</button><button type="button" class="note-delete-button" :disabled="deleteBusy" @click="deleteSelectedNotes">{{ deleteBusy ? '正在删除…' : '删除并提交' }}</button></div></section></div>
     <p v-if="error" class="reader-error" role="alert">{{ error }}</p><p v-if="message" class="notes-success" role="status">{{ message }}</p>
     <p v-if="draftStorageMessage || draftStorageWarning" class="draft-storage-warning" role="alert">{{ draftStorageMessage || draftStorageWarning }}<button type="button" class="action-button action-secondary" @click="downloadDraft">下载当前 Markdown</button></p>
+    <p v-if="directoryLoading" class="hint" role="status">正在加载笔记目录…</p><div v-else-if="!directoryReady" class="hint" role="alert"><span>{{ directoryError || '笔记目录暂未加载完成，请重试。' }}</span> <button type="button" :disabled="directoryLoading" @click="initialize(true)">重试</button></div>
     <section class="draft-recovery-area" aria-label="本机未完成草稿"><button type="button" class="action-button action-secondary recovery-check-button" :disabled="recoveryRefreshing || !draftScopeReady" title="标签页异常关闭未释放租约时，通常约 60 秒后可恢复；也可手动检查。" @click="refreshRecoveryDrafts"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13.3 6A5.5 5.5 0 1 0 13.5 9M13.3 2.8V6h-3.2"/></svg>{{ recoveryRefreshing ? '正在检查…' : '检查可恢复草稿' }}</button><small v-if="!recoveryDrafts.length">已自动保存的草稿，可在重新打开后恢复。</small><section v-if="recoveryDrafts.length" class="draft-recovery" aria-labelledby="draft-recovery-title"><div><h2 id="draft-recovery-title">发现本机未完成草稿</h2><p>恢复不会覆盖已保存内容；保存时仍会用草稿原来的版本基线检查冲突。</p></div><ul><li v-for="draft in recoveryDrafts" :key="draft.id"><span><strong>{{ draft.title || '新建笔记' }}</strong><small>{{ draft.sourceDocumentId ? `编辑已有笔记 · ${draft.sourceKind === 'blog' ? 'Blog' : '个人笔记'}` : '新建个人笔记' }} · {{ date(draft.updatedAt) }} · 基线 {{ draft.baseHead.slice(0, 10) || '无' }}</small></span><span><button type="button" class="action-button action-secondary" :disabled="editing" @click="restoreDraft(draft)">恢复</button><button type="button" class="action-button action-secondary discard-draft-button" :disabled="editing" @click="discardRecoveredDraft(draft)">丢弃</button></span></li></ul><p v-if="editing" class="hint">请先保存或结束当前编辑，再恢复或丢弃其他草稿。</p></section></section>
     <section v-if="isLocalStore && syncPanelOpen" class="sync-info-panel" role="region" aria-label="GitHub 同步说明"><div><h2>GitHub 同步尚未接通</h2><button type="button" class="action-button action-secondary" aria-label="关闭同步说明" @click="syncPanelOpen = false">关闭</button></div><p>当前笔记只保存到此设备的本地测试 Git 库，不会上传到 GitHub 或导入私有知识库。</p><p>真实同步接通后，需要由你在 KnowledgeDB 站点填写 <code>KnowledgeDB-docs</code> 的 Contents 读写令牌；令牌只在当前标签页内存使用。此演示没有令牌输入，也不会请求 GitHub。</p></section>
       <div class="note-content">
@@ -607,7 +694,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
           <button v-if="error || draftStorageState === 'error' || draftStorageState === 'unavailable'" type="button" class="action-button action-secondary" @click="downloadDraft">下载当前草稿</button>
         </template>
         <template v-else-if="selected">
-          <div class="note-view-actions"><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="!draftScopeReady" @click="beginEdit(false)">编辑笔记</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div><p class="eyebrow">{{ selected.sourceKind === 'blog' ? 'Blog 阅读记录' : '个人笔记' }} · {{ selected.status === 'draft' ? '草稿' : '正式' }}</p><h2>{{ selected.title }}</h2><p class="hint">{{ selected.tags.join(' · ') }} · 更新于 {{ date(selected.updated) }}</p>
+          <div class="note-view-actions"><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="!draftScopeReady || !directoryReady" @click="beginEdit(false)">编辑笔记</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div><p class="eyebrow">{{ selected.sourceKind === 'blog' ? 'Blog 阅读记录' : '个人笔记' }} · {{ selected.status === 'draft' ? '草稿' : '正式' }}</p><h2>{{ selected.title }}</h2><p class="hint">{{ selected.tags.join(' · ') }} · 更新于 {{ date(selected.updated) }}</p>
           <div v-if="selected.sourceKind === 'blog'" class="source-card"><strong>原始出处</strong><p>{{ selected.sources?.[0]?.originalTitle }} · {{ selected.sources?.[0]?.author || '作者待核对' }} · {{ selected.sources?.[0]?.siteName }}</p><a v-if="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" :href="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" target="_blank" rel="noopener noreferrer">{{ selected.sources?.[0]?.canonicalUrl }}</a><p>访问于 {{ selected.sources?.[0]?.accessedAt }}</p></div>
           <article ref="readerRoot" class="document-body note-read-body" v-html="renderMarkdown(markdown, selected.path)" />
         </template>
