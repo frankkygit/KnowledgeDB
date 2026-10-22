@@ -36,8 +36,8 @@ function harness(store, drafts = []) {
 }
 function makeStore(list) {
   const store = { kind:'github', namespace:'test', repository:'owner/docs', branch:'main', saves:[], saveCalls:[], lists:0,
-    list(){ this.lists++; return list() }, async get(id){ return { note:{ documentId:id,title:'Existing',tags:[],status:'published',sourceKind:'personal',sources:[],path:'content/notes/x.md' }, markdown:'# old', head:'b'.repeat(40) } },
-    async save(payload, head){ this.saves.push(head); this.saveCalls.push(JSON.parse(JSON.stringify(payload))); if (!/^[a-f0-9]{40}$/i.test(head)) throw Error('草稿没有有效的 docs HEAD 基线；请刷新目录后重新编辑。'); if (this.expectedHead && head !== this.expectedHead) throw Error('HEAD conflict'); return { note:{ documentId:payload.documentId,title:payload.title,tags:payload.tags,status:payload.status,sourceKind:'personal',sources:[],path:'content/notes/x.md',created:'2026-10-22',updated:'2026-10-22' },head:'c'.repeat(40) } }, asset:async()=>new Blob(), deleteNotes:async()=>({head:'d'.repeat(40)}) }
+    list(){ this.lists++; if (this.listFailure && this.lists >= (this.failListAfter || 1)) throw this.listFailure; return list() }, async get(id){ if (this.getFailure) throw this.getFailure; return { note:{ documentId:id,title:'Existing',tags:[],status:'published',sourceKind:'personal',sources:[],path:'content/notes/x.md' }, markdown:'# old', head:'b'.repeat(40) } },
+    async save(payload, head){ this.saves.push(head); this.saveCalls.push(JSON.parse(JSON.stringify(payload))); if (this.saveDelay) await this.saveDelay.promise; if (!/^[a-f0-9]{40}$/i.test(head)) throw Error('草稿没有有效的 docs HEAD 基线；请刷新目录后重新编辑。'); if (this.expectedHead && head !== this.expectedHead) throw Error('HEAD conflict'); return { note:{ documentId:payload.documentId,title:payload.title,tags:payload.tags,status:payload.status,sourceKind:'personal',sources:[],path:'content/notes/x.md',created:'2026-10-22',updated:'2026-10-22' },head:'c'.repeat(40) } }, asset:async()=>new Blob(), deleteNotes:async()=>({head:'d'.repeat(40)}) }
   return store
 }
 // A delayed directory cannot expose the new-note path or let direct beginEdit bypass the gate.
@@ -53,6 +53,21 @@ h.state.title.value='A'; h.state.tagsText.value='tag-a, tag-b'; h.state.status.v
 assert.deepEqual(store.saves,['a'.repeat(40)])
 assert.equal(store.saveCalls.length,1); assert.deepEqual(store.saveCalls[0].tags,['tag-a','tag-b']); assert.equal(store.saveCalls[0].markdown,'# A'); assert.equal(store.saveCalls[0].status,'published'); assert.deepEqual(store.saveCalls[0].assets,[{name:'a.png',type:'image/png',base64:'YQ=='}])
 assert.equal(h.state.error.value,''); assert.match(h.state.message.value,/已保存到 GitHub docs/); assert.equal(h.state.editing.value,false); assert.equal(h.state.selectedId.value,store.saveCalls[0].documentId)
+assert.equal(h.state.busy.value,false)
+h.state.beginEdit(false); assert.equal(h.state.editing.value,true)
+h.state.editMarkdown.value='# second save'; await h.state.save(); assert.equal(store.saveCalls.length,2); assert.equal(h.state.busy.value,false); assert.equal(h.state.error.value,'')
+h.state.beginEdit(true); assert.equal(h.state.editing.value,true); await h.state.openNote(store.saveCalls[1].documentId); assert.equal(h.state.selectedId.value,store.saveCalls[1].documentId)
+h.unmount(); h.scope.stop()
+// A commit followed by a failed readback unlocks the UI and reports that the write already succeeded.
+store=makeStore(async()=>({notes:[],head:'7'.repeat(40)})); h=harness(store); h.mount(); await new Promise(r=>setTimeout(r,0)); await flush(); h.state.beginEdit(true); h.state.title.value='Committed'; h.state.editMarkdown.value='# Committed'; store.getFailure=Error('readback offline'); await h.state.save();
+assert.equal(store.saveCalls.length,1); assert.equal(h.state.busy.value,false); assert.match(h.state.error.value,/已保存，但读取失败/); assert.match(h.state.message.value,/已保存到 GitHub docs/)
+h.state.beginEdit(true); assert.equal(h.state.editing.value,true); h.unmount(); h.scope.stop()
+store=makeStore(async()=>({notes:[],head:'6'.repeat(40)})); store.listFailure=Error('refresh offline'); store.failListAfter=2; h=harness(store); h.mount(); await new Promise(r=>setTimeout(r,0)); await flush(); h.state.beginEdit(true); h.state.title.value='Committed'; h.state.editMarkdown.value='# Committed'; await h.state.save(); assert.equal(store.saveCalls.length,1); assert.equal(h.state.busy.value,false); assert.match(h.state.error.value,/已保存，但读取失败/); h.unmount(); h.scope.stop()
+// A late save from the old store cannot unlock a save owned by the replacement store.
+const oldSave=deferred(); store=makeStore(async()=>({notes:[],head:'8'.repeat(40)})); store.saveDelay=oldSave; h=harness(store); h.mount(); await new Promise(r=>setTimeout(r,0)); await flush(); h.state.beginEdit(true); h.state.title.value='Old'; h.state.editMarkdown.value='# Old'; const oldOperation=h.state.save(); await flush()
+const replacement=makeStore(async()=>({notes:[],head:'9'.repeat(40)})); h.props.store=replacement; await flush(); await new Promise(r=>setTimeout(r,0)); await flush(); h.state.beginEdit(true); assert.equal(h.state.discardPrompt.value,true); h.state.discardEdits(); h.state.title.value='New'; h.state.editMarkdown.value='# New'; const newSave=deferred(); replacement.saveDelay=newSave; const newOperation=h.state.save(); await flush(); assert.equal(replacement.saveCalls.length,1); assert.equal(h.state.busy.value,true)
+oldSave.resolve(); await oldOperation; await flush(); assert.equal(h.state.busy.value,true)
+newSave.resolve(); await newOperation; await flush(); assert.equal(h.state.busy.value,false); assert.equal(replacement.saveCalls.length,1)
 h.unmount(); h.scope.stop()
 // An invalid-base new draft is safely rebased after list, preserving content and assets.
 const asset={name:'x.png',type:'image/png',base64:'YWJj'}
@@ -64,7 +79,7 @@ h.state.editMarkdown.value += '\nmore'; await h.state.save(); assert.deepEqual(s
 h.unmount(); h.scope.stop()
 // A previously valid older baseline is preserved and conflicts at the store's strict save boundary.
 const old={...recovered,id:'old',baseHead:'f'.repeat(40)}; store=makeStore(async()=>({notes:[],head:'1'.repeat(40)})); store.expectedHead='1'.repeat(40); h=harness(store,[old]); h.mount(); await new Promise(r=>setTimeout(r,0)); await flush(); await h.state.restoreDraft(old)
-assert.equal(h.state.editorBaseHead.value,'f'.repeat(40)); await h.state.save(); assert.deepEqual(store.saves,['f'.repeat(40)]); assert.match(h.state.error.value,/HEAD conflict/)
+assert.equal(h.state.editorBaseHead.value,'f'.repeat(40)); await h.state.save(); assert.deepEqual(store.saves,['f'.repeat(40)]); assert.match(h.state.error.value,/HEAD conflict/); assert.equal(h.state.busy.value,false); store.expectedHead='1'.repeat(40); h.state.editorBaseHead.value='1'.repeat(40); await h.state.save(); assert.equal(store.saveCalls.length,2); assert.equal(h.state.busy.value,false); assert.equal(h.state.error.value,'')
 h.unmount(); h.scope.stop()
 // A malformed new draft whose stable document ID is now occupied remains untouched for download/review.
 const occupied={...recovered,id:'occupied',documentId:'note-stable',baseHead:''}; store=makeStore(async()=>({notes:[{documentId:'note-stable'}],head:'4'.repeat(40)})); d=[occupied]; h=harness(store,d); h.mount(); await new Promise(r=>setTimeout(r,0)); await flush(); await h.state.restoreDraft(occupied)

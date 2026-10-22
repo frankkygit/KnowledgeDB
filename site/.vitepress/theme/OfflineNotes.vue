@@ -68,6 +68,7 @@ const isDraggingImage = ref(false)
 let editSession = 0
 let loadSession = 0
 let directorySession = 0
+let busyOwner: object | null = null
 let editorStore: NotesStore | null = null
 let activeDraftNamespace = ''
 let activeDraftTabId = ''
@@ -185,6 +186,8 @@ function requestDelete(ids: string[], trigger?: HTMLElement) {
 }
 async function deleteSelectedNotes() {
   if (deleteBusy.value || !deleteIds.value.length) return
+  const operation = {}
+  busyOwner = operation
   deleteBusy.value = true; busy.value = true; error.value = ''; message.value = ''
   const ids = [...deleteIds.value]
   const signature = JSON.stringify({ ids: [...ids].sort(), head: deleteHead.value })
@@ -215,7 +218,7 @@ async function deleteSelectedNotes() {
     nextTick(restoreDeleteFocus)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '删除失败；笔记与选择仍保留。'
-  } finally { busy.value = false; deleteBusy.value = false }
+  } finally { if (busyOwner === operation) busy.value = false; deleteBusy.value = false }
 }
 function handleDeleteKeydown(event: KeyboardEvent) {
   if (!deleteDialog.value) return
@@ -250,6 +253,7 @@ watch([selectedForDeletion, visible], () => nextTick(() => {
   if (selectAllCheckbox.value) selectAllCheckbox.value.indeterminate = visible.value.some(note => selectedForDeletion.value.includes(note.documentId)) && !visible.value.every(note => selectedForDeletion.value.includes(note.documentId))
 }), { flush: 'post' })
 function beginEdit(create = false, discardConfirmed = false) {
+  if (busy.value) return
   if (!draftScopeReady.value || !directoryReady.value || !validDocsHead(head.value)) {
     error.value = directoryError.value || '笔记目录暂未加载完成，请重试。'
     return
@@ -415,6 +419,8 @@ async function save() {
     if (creating.value && !editorBaseHead.value) message.value = '当前输入仍保留；可先下载，刷新目录后再新建。'
     return
   }
+  const operation = {}
+  busyOwner = operation
   busy.value = true; error.value = ''; message.value = ''
   const store = editorStore
   const storeSession = directorySession
@@ -433,16 +439,25 @@ async function save() {
     if (!componentMounted || store !== props.store || storeSession !== directorySession || session !== editSession) return
     head.value = data.head
     await clearActiveDraft()
+    if (busyOwner !== operation || !componentMounted || store !== props.store || storeSession !== directorySession) return
     const savedStatus = payload.status === 'draft' ? '草稿' : '正式'
     message.value = isLocalStore.value ? `已保存到本地测试库（${savedStatus}）；列表已更新，尚未同步 GitHub。` : `已保存到 GitHub docs（${savedStatus}）；列表已更新。`
     const matchingNote = { ...data.note, title: payload.title, status: payload.status, tags: payload.tags, sources: data.note.sources || selected.value?.sources || [], _text: payload.markdown }
     const nextFilters = reconcileSavedNoteFilters(matchingNote, { source: sourceFilter.value, status: statusFilter.value, tags: tagFilter.value, search: search.value })
     sourceFilter.value = nextFilters.source; statusFilter.value = nextFilters.status; tagFilter.value = nextFilters.tags; search.value = nextFilters.search
     pendingRequest.value = null; pendingAssets.value = []; editing.value = false; creating.value = false
-    await refresh(false); await openNote(data.note.documentId)
+    try {
+      await refresh(false)
+      if (busyOwner !== operation || !componentMounted || store !== props.store || storeSession !== directorySession) return
+      await openNote(data.note.documentId)
+    } catch (cause) {
+      if (busyOwner === operation && componentMounted && store === props.store && storeSession === directorySession) {
+        error.value = `已保存，但读取失败：${cause instanceof Error ? cause.message : '请刷新目录后重新打开。'}`
+      }
+    }
   } catch (cause) {
     if (componentMounted && store === props.store && storeSession === directorySession && session === editSession) error.value = cause instanceof Error ? cause.message : '保存失败。输入仍保留在编辑器中。'
-  } finally { if (store === props.store && storeSession === directorySession && session === editSession) busy.value = false }
+  } finally { if (busyOwner === operation) busy.value = false }
 }
 function toggleTag(tag: string) { tagFilter.value = tagFilter.value.includes(tag) ? tagFilter.value.filter(item => item !== tag) : [...tagFilter.value, tag] }
 function clearFilters() { sourceFilter.value = 'all'; statusFilter.value = 'all'; tagFilter.value = []; search.value = '' }
@@ -625,7 +640,7 @@ async function initialize(retry = false) {
   } finally { if (componentMounted && store === props.store && session === directorySession) directoryLoading.value = false }
 }
 onMounted(() => { componentMounted = true; void initialize() })
-watch(() => props.store, () => { editSession++; busy.value = false; void initialize() })
+watch(() => props.store, () => { editSession++; busyOwner = null; busy.value = false; void initialize() })
 watch([editing, title, tagsText, status, editMarkdown, pendingAssets, editorBaseHead], scheduleDraftSave)
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
@@ -635,7 +650,7 @@ onMounted(() => {
   window.addEventListener('pageshow', refreshRecoveredDraftsOnReturn)
 })
 function persistBeforePageHide() { void persistActiveDraft(); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace) }
-onBeforeUnmount(() => { componentMounted = false; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
+onBeforeUnmount(() => { componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
 onBeforeUnmount(() => { objectUrls.forEach(url => URL.revokeObjectURL(url)) })
 defineExpose({ hasUnsavedChanges: () => dirty.value, confirmLeave })
 watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previewMode], async () => {
@@ -694,7 +709,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
           <button v-if="error || draftStorageState === 'error' || draftStorageState === 'unavailable'" type="button" class="action-button action-secondary" @click="downloadDraft">下载当前草稿</button>
         </template>
         <template v-else-if="selected">
-          <div class="note-view-actions"><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="!draftScopeReady || !directoryReady" @click="beginEdit(false)">编辑笔记</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div><p class="eyebrow">{{ selected.sourceKind === 'blog' ? 'Blog 阅读记录' : '个人笔记' }} · {{ selected.status === 'draft' ? '草稿' : '正式' }}</p><h2>{{ selected.title }}</h2><p class="hint">{{ selected.tags.join(' · ') }} · 更新于 {{ date(selected.updated) }}</p>
+          <div class="note-view-actions"><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !draftScopeReady || !directoryReady" @click="beginEdit(false)">编辑笔记</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div><p class="eyebrow">{{ selected.sourceKind === 'blog' ? 'Blog 阅读记录' : '个人笔记' }} · {{ selected.status === 'draft' ? '草稿' : '正式' }}</p><h2>{{ selected.title }}</h2><p class="hint">{{ selected.tags.join(' · ') }} · 更新于 {{ date(selected.updated) }}</p>
           <div v-if="selected.sourceKind === 'blog'" class="source-card"><strong>原始出处</strong><p>{{ selected.sources?.[0]?.originalTitle }} · {{ selected.sources?.[0]?.author || '作者待核对' }} · {{ selected.sources?.[0]?.siteName }}</p><a v-if="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" :href="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" target="_blank" rel="noopener noreferrer">{{ selected.sources?.[0]?.canonicalUrl }}</a><p>访问于 {{ selected.sources?.[0]?.accessedAt }}</p></div>
           <article ref="readerRoot" class="document-body note-read-body" v-html="renderMarkdown(markdown, selected.path)" />
         </template>
