@@ -1,5 +1,5 @@
-import { digest as digestText, normalizeText } from './comment-model'
-import { markdownBody, parseMarkdownBody } from './markdown-core'
+import { digest as digestText, normalizeText } from './comment-model.ts'
+import { markdownBody, parseMarkdownBody } from './markdown-core.ts'
 import type { NoteSaveInput } from './note-store'
 
 export type NoteParagraph = { blockId: string; text: string; textDigest: string; sectionTitle: string }

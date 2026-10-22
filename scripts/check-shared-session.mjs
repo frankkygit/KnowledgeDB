@@ -28,10 +28,11 @@ function makeCommentsHarness() {
   let connectGate = null
   let operationGate = null
   let onOperationStart = null
-  let denied = false
+  let denied = 0
+  const events = []
   class MockComments {
     constructor(repository, branch, token) { Object.assign(this, { repository, branch, token, connects: 0, reads: 0, creates: 0, disconnects: 0 }); clients.push(this) }
-    async connect() { this.connects++; if (connectGate) await connectGate.promise; if (denied) throw new Error('403 denied') }
+    async connect() { this.connects++; const status = denied; if (connectGate) await connectGate.promise; if (status) throw Object.assign(new Error(`${status} denied`), { status }) }
     async read() { this.reads++; return { threads: [{ id: this.repository }], head: this.repository } }
     async create(_record, validate) { this.creates++; await validate(); return { threads: [], head: 'saved' } }
     disconnect() { this.disconnects++; this.token = '' }
@@ -50,10 +51,10 @@ function makeCommentsHarness() {
     if (name.includes('comment-model')) return { normalizeText: text => text, createAnchor: async (_snapshot, doc) => ({ contentRevision: doc.contentRevision }), validateAnchor: async () => {} }
     throw new Error(`Unexpected comments dependency: ${name}`)
   }, output, output.exports)
-  const props = vue.reactive({ doc: { documentId: 'doc-a', contentRevision: 'rev-a' }, article: null, docsCommit: 'commit-a', docsRepository: 'owner/docs', loadSnapshot: async () => ({}), localMode: false, sharedToken: 'test-token', repository: 'owner/comments', branch: 'main', sessionKey: 'session-a' })
+  const props = vue.reactive({ doc: { documentId: 'doc-a', contentRevision: 'rev-a' }, article: null, docsCommit: 'commit-a', docsRepository: 'owner/docs', loadSnapshot: async () => ({}), localMode: false, sharedToken: 'test-token', repository: 'owner/comments', branch: 'main', sessionKey: 'session-a', active: true })
   const scope = vue.effectScope()
-  const state = scope.run(() => output.exports.default.setup(props, { expose() {}, emit() {} }))
-  return { state, props, clients, mounted, scope, connectGate: value => { connectGate = value }, operationGate: (value, started) => { operationGate = value; onOperationStart = started }, deny: value => { denied = value } }
+  const state = scope.run(() => output.exports.default.setup(props, { expose() {}, emit(name, ...args) { events.push([name, ...args]) } }))
+  return { state, props, clients, mounted, events, scope, connectGate: value => { connectGate = value }, operationGate: (value, started) => { operationGate = value; onOperationStart = started }, deny: value => { denied = value === true ? 403 : value || 0 } }
 }
 
 function layoutHarness() {
@@ -81,6 +82,7 @@ function layoutHarness() {
     if (name === 'vitepress') return { withBase: value => value }
     if (name.includes('github-docs')) return { GitHubDocs: MockDocs, commentsConfig: config => ({ repository: config?.commentsRepository || 'frankkygit/KnowledgeDB-comments', branch: config?.commentsBranch || 'main' }) }
     if (name.includes('github-notes')) return { GitHubNotesStore: MockNotes }
+    if (name.includes('remember-browser')) return { clearCredential() {}, readCredential: () => null, saveCredential: () => true }
     if (name.includes('render-cache')) return { RenderCache: MockCache, renderCacheKey: () => '' }
     if (name.includes('markdown')) return { renderMarkdown: () => '', sanitizeHtml: value => value }
     if (name.includes('ReaderComments')) return {}
@@ -133,6 +135,22 @@ assert.equal(comments.state.body.value, '')
 comments.props.branch = 'main'
 await flush()
 assert.equal(comments.state.body.value, 'draft-a')
+comments.scope.stop()
+
+// A late comments 401 from the old client must not invalidate a replacement credential.
+comments = makeCommentsHarness()
+await flush()
+const stale401Gate = deferred()
+comments.connectGate(stale401Gate)
+comments.deny(401)
+const stale401 = comments.state.connect()
+comments.deny(false)
+comments.props.sharedToken = 'replacement-token'
+await flush()
+stale401Gate.resolve()
+await stale401
+await flush()
+assert.equal(comments.events.some(([name]) => name === 'auth-invalid'), false, 'a stale session 401 must not clear a replacement credential')
 comments.scope.stop()
 
 // Replacing credentials invalidates a pending connection; its late completion cannot read or restore the old client.
@@ -216,46 +234,30 @@ comments.deny(true)
 await comments.state.connect()
 assert.equal(comments.state.connected.value, false)
 assert.match(comments.state.error.value, /403/)
+assert.equal(comments.events.some(([name]) => name === 'auth-invalid'), false, '403 must not clear the remembered credential')
 comments.deny(false)
 await comments.state.connect()
 assert.equal(comments.state.connected.value, true)
 comments.scope.stop()
 
-// The parent retains one token only for the active docs and notes session, then clears clients on failure/disconnect.
+comments = makeCommentsHarness()
+await flush()
+comments.deny(401)
+await comments.state.connect()
+assert.equal(comments.events.some(([name]) => name === 'auth-invalid'), true, '401 must notify the parent to clear the remembered credential')
+comments.scope.stop()
+
+// The parent validates docs without waiting for the lazy notes index; both stores share a token until disconnect.
 let layout = layoutHarness()
 layout.state.tokenInput.value = 'shared-test-token'
 await layout.state.connectWithToken()
 assert.equal(layout.state.sharedToken.value, 'shared-test-token')
 assert.equal(layout.state.tokenInput.value, '')
+assert.equal(layout.notes[0].connects, undefined, 'notes store setup is deferred until its first lazy view')
 layout.state.disconnect(false)
 assert.equal(layout.state.sharedToken.value, '')
 assert.equal(layout.docs[0].token, '')
 assert.equal(layout.notes[0].token, '')
-layout.scope.stop()
-
-layout = layoutHarness()
-layout.failNotes(true)
-layout.state.tokenInput.value = 'shared-test-token'
-await layout.state.connectWithToken()
-assert.equal(layout.state.connected.value, false)
-assert.equal(layout.state.sharedToken.value, '')
-assert.equal(layout.docs[0].token, '')
-assert.equal(layout.notes[0].token, '')
-layout.scope.stop()
-
-layout = layoutHarness()
-const notesGate = deferred()
-layout.noteGate(notesGate)
-layout.state.tokenInput.value = 'shared-test-token'
-const pendingConnection = layout.state.connectWithToken()
-await flush()
-assert.equal(layout.notes.length, 1)
-layout.state.disconnect(false)
-assert.equal(layout.notes[0].token, '')
-notesGate.resolve()
-await pendingConnection
-assert.equal(layout.state.connected.value, false)
-assert.equal(layout.state.sharedToken.value, '')
 layout.scope.stop()
 
 console.log('Shared-session component regressions passed: automatic comments auth, draft isolation, stale connect/save cancellation, permission retry, shared PAT cleanup, and docs/notes failure isolation.')

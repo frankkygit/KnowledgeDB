@@ -1,6 +1,7 @@
-import { safePath } from './github-docs'
-import { buildNoteContent, editableNoteMarkdown, noteReferencedAssets } from './note-content'
-import { digest } from './comment-model'
+import { safePath } from './github-docs.ts'
+import { buildNoteContent, editableNoteMarkdown, noteReferencedAssets } from './note-content.ts'
+import { digest } from './comment-model.ts'
+import { SessionCache, createLimiter } from './session-cache.ts'
 import type { NoteDeleteResult, NoteDocument, NoteRecord, NoteSaveInput, NoteSaveResult, NotesStore } from './note-store'
 
 type TreeEntry = { path: string; mode: string; type: string; sha: string; size?: number }
@@ -32,6 +33,15 @@ export class GitHubNotesStore implements NotesStore {
   #token: string
   #abort = new AbortController()
   #snapshot: State | null = null
+  #cache = new SessionCache<string, Uint8Array>(256, 32 * 1024 * 1024, bytes => bytes.byteLength)
+  #limit = createLimiter(4)
+  #listCache: { at: number; value: { notes: NoteRecord[]; head: string } } | null = null
+  #disconnected = false
+  #epoch = 0
+  #statePending = new Map<boolean, Promise<State>>()
+  #stateSequence = 0
+  #privateConfirmed = false
+  #privatePending: Promise<void> | null = null
   constructor(readonly repository: string, token: string, branch = 'main') {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !token.trim()) throw new Error('请填写 docs 私库 owner/repo 和 Contents 读写令牌。')
     safePath(branch)
@@ -41,6 +51,7 @@ export class GitHubNotesStore implements NotesStore {
   }
 
   async request(path: string, method = 'GET', body?: unknown): Promise<any> {
+    if (this.#disconnected) throw new DOMException('docs 会话已断开。', 'AbortError')
     let response: Response
     try {
       response = await fetch(`https://api.github.com/repos/${this.repository}${path ? `/${path}` : ''}`, {
@@ -64,23 +75,55 @@ export class GitHubNotesStore implements NotesStore {
       }
       throw new NotesGitHubError(response.status, messages[response.status] || `GitHub docs 请求失败（${response.status}）；编辑输入和草稿仍保留。`)
     }
-    return response.status === 204 ? null : response.json()
+    const data = response.status === 204 ? null : await response.json()
+    if (this.#disconnected) throw new DOMException('docs 会话已断开。', 'AbortError')
+    return data
   }
 
   async connect() {
-    const repo = await this.request('')
-    if (repo.private !== true) throw new Error('笔记必须保存在私有 docs 仓库，请检查仓库设置。')
-    await this.request(`git/ref/heads/${safePath(this.branch)}`)
-    const state = await this.readState()
+    await this.ensurePrivate()
+    const state = await this.readState(true)
+    if (this.#disconnected) throw new DOMException('docs 会话已断开。', 'AbortError')
     if (!state.documents || !Array.isArray(state.documents.documents)) throw new Error('catalog/documents.json 无效，已停止连接。')
     if (!state.search || !Array.isArray(state.search.items)) throw new Error('catalog/search.json 无效，已停止连接。')
-    this.#snapshot = state
   }
 
-  async readState(): Promise<State> {
+  private async ensurePrivate(): Promise<void> {
+    if (this.#privateConfirmed) return
+    if (this.#privatePending) return this.#privatePending
+    const epoch = this.#epoch
+    const pending = (async () => {
+      const repo = await this.request('')
+      if (this.#disconnected || epoch !== this.#epoch) throw new DOMException('docs 会话已断开。', 'AbortError')
+      if (repo.private !== true) throw new Error('笔记必须保存在私有 docs 仓库，请检查仓库设置。')
+      this.#privateConfirmed = true
+    })()
+    this.#privatePending = pending
+    try { await pending }
+    finally { if (this.#privatePending === pending) this.#privatePending = null }
+  }
+
+  readState(force = false): Promise<State> {
+    const pending = this.#statePending.get(force)
+    if (pending) return pending
+    const request = this.#loadState(force).finally(() => {
+      if (this.#statePending.get(force) === request) this.#statePending.delete(force)
+    })
+    this.#statePending.set(force, request)
+    return request
+  }
+
+  /** Writes bypass any older read pending and inspect the moving ref themselves. */
+  private readWriteState(): Promise<State> { return this.#loadState(true) }
+
+  async #loadState(force = false): Promise<State> {
+    await this.ensurePrivate()
+    const epoch = this.#epoch
+    const sequence = ++this.#stateSequence
     const ref = await this.request(`git/ref/heads/${safePath(this.branch)}`)
     const head = ref.object?.sha
     if (!/^[a-f0-9]{40}$/i.test(head || '')) throw new Error('docs main 分支 HEAD 无效。')
+    if (this.#snapshot?.head === head) return this.#snapshot
     const commit = await this.request(`git/commits/${head}`)
     const treeResult = await this.request(`git/trees/${commit.tree.sha}?recursive=1`)
     if (treeResult.truncated) throw new Error('docs 仓库目录过大，无法安全更新索引。')
@@ -93,9 +136,9 @@ export class GitHubNotesStore implements NotesStore {
       }
       return this.readBlob(entry.sha)
     }
-    const notesBytes = await read('catalog/notes.json', false)
-    const documentsBytes = await read('catalog/documents.json', true)
-    const searchBytes = await read('catalog/search.json', true)
+    const [notesBytes, documentsBytes, searchBytes] = await Promise.all([
+      read('catalog/notes.json', false), read('catalog/documents.json', true), read('catalog/search.json', true),
+    ])
     const notes = notesBytes ? parseJson(notesBytes, 'catalog/notes.json') : { schemaVersion: 1, notes: [], requests: {} }
     const documents = parseJson(documentsBytes!, 'catalog/documents.json')
     const search = parseJson(searchBytes!, 'catalog/search.json')
@@ -103,52 +146,69 @@ export class GitHubNotesStore implements NotesStore {
     notes.requests ||= {}
     if (documents.schemaVersion !== 1 || !Array.isArray(documents.documents)) throw new Error('catalog/documents.json 格式不兼容，已停止保存。')
     if (search.schemaVersion !== 1 || !Array.isArray(search.items)) throw new Error('catalog/search.json 格式不兼容，已停止保存。')
-    return { head, tree: commit.tree.sha, entries, notes, documents, search }
+    const state = { head, tree: commit.tree.sha, entries, notes, documents, search }
+    if (!this.#disconnected && epoch === this.#epoch && sequence === this.#stateSequence) this.#snapshot = state
+    return state
   }
 
   async readBlob(sha: string): Promise<Uint8Array> {
-    const blob = await this.request(`git/blobs/${sha}`)
-    if (blob.encoding !== 'base64' || typeof blob.content !== 'string') throw new Error('GitHub 返回了不支持的 blob 编码。')
-    return decodeBase64(blob.content)
+    return this.#cache.getOrLoad(sha, async () => {
+      const blob = await this.#limit(() => this.request(`git/blobs/${sha}`))
+      if (blob.encoding !== 'base64' || typeof blob.content !== 'string') throw new Error('GitHub 返回了不支持的 blob 编码。')
+      return decodeBase64(blob.content)
+    })
   }
 
-  async list(): Promise<{ notes: NoteRecord[]; head: string }> {
-    const state = await this.readState()
-    this.#snapshot = state
+  async list(options: { force?: boolean } = {}): Promise<{ notes: NoteRecord[]; head: string }> {
+    const epoch = this.#epoch
+    if (!options.force && this.#listCache && Date.now() - this.#listCache.at < 30_000) return this.#listCache.value
+    const state = await this.readState(Boolean(options.force))
+    if (this.#disconnected || epoch !== this.#epoch) throw new DOMException('docs 会话已断开。', 'AbortError')
     const notes: NoteRecord[] = state.notes.notes.map((note: any) => {
       if (!validId(note.documentId) || note.path !== `content/notes/${note.documentId}/index.md` || !['blog', 'personal'].includes(note.sourceKind) || !['draft', 'published'].includes(note.status) || !Array.isArray(note.tags) || !Array.isArray(note.sources)) throw new Error('笔记目录记录无效；已停止读取。')
       const searchable = state.search.items.filter((item: any) => item.documentId === note.documentId).map((item: any) => item.text || '').join(' ')
       return { ...note, _text: searchable }
     })
-    return { notes, head: state.head }
+    const result = { notes, head: state.head }
+    if (!this.#disconnected && epoch === this.#epoch) this.#listCache = { at: Date.now(), value: result }
+    return result
   }
 
   async get(documentId: string): Promise<NoteDocument> {
+    const epoch = this.#epoch
     if (!validId(documentId)) throw new Error('笔记 ID 格式无效。')
-    const state = this.#snapshot || (this.#snapshot = await this.readState())
+    const state = this.#snapshot || await this.readState()
+    if (this.#disconnected || epoch !== this.#epoch) throw new DOMException('docs 会话已断开。', 'AbortError')
+    this.#snapshot ||= state
     const note = state.notes.notes.find((item: any) => item.documentId === documentId)
     if (!note || note.path !== `content/notes/${documentId}/index.md`) throw new Error('该笔记不在当前 docs 分支目录中。')
     const entry = state.entries.get(note.path)
     if (!entry) throw new Error('笔记正文在目录中缺失。')
     const identityMarkdown = new TextDecoder().decode(await this.readBlob(entry.sha))
+    if (this.#disconnected) throw new DOMException('docs 会话已断开。', 'AbortError')
     return { note, markdown: editableNoteMarkdown(identityMarkdown), identityMarkdown, head: state.head }
   }
 
   async asset(documentId: string, name: string): Promise<Blob> {
+    const epoch = this.#epoch
     if (!validId(documentId) || !/^[A-Za-z0-9_.-]{1,100}\.(?:png|jpe?g|gif|webp|avif)$/i.test(name)) throw new Error('附件路径无效。')
-    const state = this.#snapshot || (this.#snapshot = await this.readState())
+    const state = this.#snapshot || await this.readState()
+    if (this.#disconnected || epoch !== this.#epoch) throw new DOMException('docs 会话已断开。', 'AbortError')
+    this.#snapshot ||= state
     const path = `content/notes/${documentId}/assets/${name}`
     const entry = state.entries.get(path)
     if (!entry) throw new Error('笔记图片附件不存在。')
     const mime = name.toLowerCase().endsWith('.png') ? 'image/png' : name.toLowerCase().endsWith('.jpg') || name.toLowerCase().endsWith('.jpeg') ? 'image/jpeg' : name.toLowerCase().endsWith('.gif') ? 'image/gif' : name.toLowerCase().endsWith('.avif') ? 'image/avif' : 'image/webp'
-    return new Blob([await this.readBlob(entry.sha)], { type: mime })
+    const bytes = await this.readBlob(entry.sha)
+    if (this.#disconnected || epoch !== this.#epoch) throw new DOMException('docs 会话已断开。', 'AbortError')
+    return new Blob([bytes], { type: mime })
   }
 
   async save(input: NoteSaveInput, expectedHead: string, requestId: string): Promise<NoteSaveResult> {
     if (!/^[a-f0-9]{40}$/i.test(expectedHead)) throw new Error('草稿没有有效的 docs HEAD 基线；请刷新目录后重新编辑。')
     if (!/^[a-f0-9-]{36}$/i.test(requestId)) throw new Error('保存请求 ID 无效。')
     if (!input.title.trim() || !input.markdown.trim() || !['draft', 'published'].includes(input.status) || !['personal', 'blog'].includes(input.sourceKind)) throw new Error('标题、正文、来源或状态无效。')
-    const state = await this.readState()
+    const state = await this.readWriteState()
     const payloadHash = await digest(JSON.stringify(input))
     const prior = state.notes.requests[requestId]
     if (prior) {
@@ -157,7 +217,7 @@ export class GitHubNotesStore implements NotesStore {
       const note = state.notes.notes.find((item: any) => item.documentId === prior.documentId)
       if (!note) throw new Error('保存请求记录找不到对应笔记，已停止重复保存。')
       const originalCommit = await this.findRequestCommit(requestId)
-      this.#snapshot = await this.readState()
+      await this.readWriteState()
       return { note, head: originalCommit }
     }
     if (state.head !== expectedHead) throw new NotesGitHubError(409, 'docs main 已被其他窗口或编辑者更新。请刷新后合并，再保存；当前输入已保留。')
@@ -235,7 +295,8 @@ export class GitHubNotesStore implements NotesStore {
       }
       throw cause
     }
-    this.#snapshot = await this.readState()
+    await this.readWriteState()
+    this.#listCache = null
     return { note, head: commit.sha }
   }
 
@@ -246,11 +307,10 @@ export class GitHubNotesStore implements NotesStore {
     const ids = [...new Set(documentIds)].sort()
     if (ids.length !== documentIds.length) throw new Error('删除目标包含重复笔记。请刷新后重试。')
     const payloadHash = await digest(JSON.stringify({ operation: 'delete', expectedHead, documentIds: ids }))
-    const state = await this.readState()
+    const state = await this.readWriteState()
     const prior = state.notes.requests[requestId]
     if (prior) {
       if (prior.operation !== 'delete' || prior.payloadHash !== payloadHash || JSON.stringify(prior.documentIds) !== JSON.stringify(ids)) throw new NotesGitHubError(409, '此 requestId 已用于不同操作或笔记集合，拒绝重复删除。')
-      this.#snapshot = state
       return { documentIds: ids, head: await this.findRequestCommit(requestId) }
     }
     if (state.head !== expectedHead) throw new NotesGitHubError(409, 'docs main 已被其他窗口或编辑者更新。请刷新目录后确认删除；当前选择仍保留。')
@@ -290,7 +350,8 @@ export class GitHubNotesStore implements NotesStore {
       }
       throw cause
     }
-    this.#snapshot = await this.readState()
+    await this.readWriteState()
+    this.#listCache = null
     return { documentIds: ids, head: commit.sha }
   }
 
@@ -305,5 +366,6 @@ export class GitHubNotesStore implements NotesStore {
     throw new Error('找到幂等记录但无法定位原始 Git 提交；保留草稿且不重复创建提交。')
   }
 
-  disconnect() { this.#abort.abort(); this.#token = '' }
+  clearPrivateCache() { this.#epoch++; this.#cache.clear(); this.#snapshot = null; this.#listCache = null; this.#statePending.clear(); this.#privateConfirmed = false; this.#privatePending = null }
+  disconnect() { this.#disconnected = true; this.clearPrivateCache(); this.#abort.abort(); this.#token = '' }
 }

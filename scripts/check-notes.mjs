@@ -15,6 +15,14 @@ class MockGitHub {
   failWriteStatus = 0;
   losePatchReply = false;
   concurrentPatch = false;
+  nextBlobGate = null;
+  delayNextBlob() {
+    let markStarted, release;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    const blocked = new Promise((resolve) => { release = resolve; });
+    this.nextBlobGate = { markStarted, blocked };
+    return { started, release };
+  }
   constructor(files) {
     const tree = /* @__PURE__ */ new Map();
     for (const [p, c] of Object.entries(files)) tree.set(p, this.blob(typeof c === "string" ? new TextEncoder().encode(c) : c));
@@ -77,6 +85,12 @@ class MockGitHub {
     }
     if (method === "GET" && path.startsWith("git/blobs/")) {
       const sha = path.slice(10), bytes = this.blobs.get(sha);
+      if (this.nextBlobGate) {
+        const gate = this.nextBlobGate;
+        this.nextBlobGate = null;
+        gate.markStarted();
+        await gate.blocked;
+      }
       return bytes ? this.response(200, { sha, encoding: "base64", size: bytes.length, content: Buffer.from(bytes).toString("base64") }) : this.response(404, { message: "Unknown blob" });
     }
     if (method === "GET" && path.startsWith("contents/")) {
@@ -337,7 +351,7 @@ async function checkFixedReads() {
     assert.ok(old.markdown.includes("Original fixed paragraph."));
     await reader.asset(input.documentId, "fixed.png");
     assert.equal(mock.requests.filter((r) => r.path.startsWith("git/ref/")).length, refReads, "get/asset must use one cached immutable read snapshot");
-    const refreshed = await reader.list();
+    const refreshed = await reader.list({ force: true });
     assert.equal(refreshed.head, second.head);
     assert.ok((await reader.get(input.documentId)).markdown.includes("Externally updated paragraph."));
     const latestFiles = mock.files();
@@ -349,8 +363,44 @@ async function checkFixedReads() {
     globalThis.fetch = oldFetch;
   }
 }
+async function checkWritesBypassOlderReads() {
+  const waitFor = async predicate => {
+    for (let i = 0; i < 100; i++) {
+      if (predicate()) return;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.fail("timed out waiting for a fresh write HEAD request");
+  };
+  const check = async mode => {
+    const mock = new MockGitHub(seedFiles()), oldFetch = globalThis.fetch;
+    globalThis.fetch = mock.fetch;
+    const store = new GitHubNotesStore(mock.repository, TEST_TOKEN);
+    const expectedHead = mock.head;
+    const gate = mock.delayNextBlob();
+    const oldList = store.list(mode === "delete" ? { force: true } : undefined);
+    await gate.started;
+    mock.advance();
+    const requestStart = mock.requests.length;
+    const write = mode === "delete"
+      ? store.deleteNotes(["note-write-race"], expectedHead, crypto.randomUUID())
+      : store.save({ documentId: "note-write-race", sourceDocumentId: null, sourceKind: "personal", title: "Write race", tags: [], status: "draft", markdown: "Body", assets: [], sources: [] }, expectedHead, crypto.randomUUID());
+    await waitFor(() => mock.requests.slice(requestStart).some(request => request.method === "GET" && request.path === "git/ref/heads/main"));
+    assert.ok(mock.requests.slice(requestStart).some(request => request.path === "git/ref/heads/main"), `${mode} must GET a fresh branch HEAD while an older read is pending`);
+    gate.release();
+    await oldList;
+    await assert.rejects(() => write, /并发|更新/);
+    const writeRequests = mock.requests.slice(requestStart);
+    assert.equal(writeRequests.some(request => request.method !== "GET"), false, `${mode} must reject a stale expected HEAD before POST/PATCH`);
+    store.disconnect();
+    globalThis.fetch = oldFetch;
+  };
+  await check("save");
+  await check("delete");
+  console.log("PASS save/delete bypass older pending reads, fetch a fresh HEAD, and stop on stale baselines before any write request.");
+}
 await checkContent();
 await checkEditingIdentity();
 await checkAdapter();
 await checkFixedReads();
+await checkWritesBypassOlderReads();
 console.log("Production notes regression passed with synthetic GitHub only.");

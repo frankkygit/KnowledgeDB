@@ -33,10 +33,11 @@ export interface NotesStore {
   readonly namespace: string
   readonly repository: string
   readonly branch: string
-  list(): Promise<{ notes: NoteRecord[]; head: string }>
+  list(options?: { force?: boolean }): Promise<{ notes: NoteRecord[]; head: string }>
   get(documentId: string): Promise<NoteDocument>
   asset(documentId: string, name: string): Promise<NoteAsset>
   save(input: NoteSaveInput, expectedHead: string, requestId: string): Promise<NoteSaveResult>
   deleteNotes(documentIds: string[], expectedHead: string, requestId: string): Promise<NoteDeleteResult>
   disconnect(): void
+  clearPrivateCache?(): void
 }

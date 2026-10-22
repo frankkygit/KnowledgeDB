@@ -1,4 +1,6 @@
 export type ReaderConfig = { repository: string; ref: string; catalogPath: string; searchPath: string; notesBranch?: string; commentsRepository?: string; commentsBranch?: string }
+import { SessionCache, createLimiter } from './session-cache.ts'
+export class DocsAccessError extends Error { constructor(readonly status: number, message: string) { super(message) } }
 export const DEFAULT_COMMENTS_REPOSITORY = 'frankkygit/KnowledgeDB-comments'
 export const DEFAULT_COMMENTS_BRANCH = 'main'
 export function commentsConfig(config: ReaderConfig | null | undefined) {
@@ -16,6 +18,9 @@ export function safePath(path: string): string {
 export class GitHubDocs {
   #token: string
   #abort = new AbortController()
+  #cache = new SessionCache<string, Uint8Array>(96, 32 * 1024 * 1024, bytes => bytes.byteLength)
+  #limit = createLimiter(4)
+  #disconnected = false
   constructor(readonly config: ReaderConfig, token: string) {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository) || !/^[a-f0-9]{40}$/i.test(config.ref)) {
       throw new Error('资料库连接配置无效，请更新站点。')
@@ -25,18 +30,25 @@ export class GitHubDocs {
   }
 
   async bytes(path: string): Promise<Uint8Array> {
+    return (await this.#cache.getOrLoad(`${this.config.ref}:${path}`, () => this.#limit(() => this.#fetchBytes(path)))).slice()
+  }
+
+  async #fetchBytes(path: string): Promise<Uint8Array> {
+    if (this.#disconnected) throw new DOMException('资料库会话已断开。', 'AbortError')
     const url = `https://api.github.com/repos/${this.config.repository}/contents/${safePath(path)}?ref=${this.config.ref}`
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${this.#token}`, Accept: 'application/vnd.github.raw+json' },
       cache: 'no-store', credentials: 'omit', redirect: 'error', signal: this.#abort.signal,
     })
     if (!response.ok) {
-      if (response.status === 401) throw new Error('令牌无效或已过期，请重新连接。')
-      if (response.status === 404) throw new Error('无法读取该版本的资料，请检查令牌是否授权此私库及 Contents 只读权限。')
-      if (response.status === 403 || response.status === 429) throw new Error('GitHub 拒绝访问或请求限流，请检查权限或稍后重试。')
-      throw new Error(`资料读取失败（${response.status}），请稍后重试。`)
+      if (response.status === 401) throw new DocsAccessError(401, '令牌无效或已过期，请重新连接。')
+      if (response.status === 404) throw new DocsAccessError(404, '无法读取该版本的资料，请检查令牌是否授权此私库及 Contents 只读权限。')
+      if (response.status === 403 || response.status === 429) throw new DocsAccessError(response.status, 'GitHub 拒绝访问或请求限流，请检查权限或稍后重试。')
+      throw new DocsAccessError(response.status, `资料读取失败（${response.status}），请稍后重试。`)
     }
-    return new Uint8Array(await response.arrayBuffer())
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    if (this.#disconnected) throw new DOMException('资料库会话已断开。', 'AbortError')
+    return bytes
   }
 
   async text(path: string): Promise<string> { return new TextDecoder().decode(await this.bytes(path)) }
@@ -47,5 +59,5 @@ export class GitHubDocs {
       throw error
     }
   }
-  disconnect() { this.#abort.abort(); this.#token = '' }
+  disconnect() { this.#disconnected = true; this.#cache.clear(); this.#abort.abort(); this.#token = '' }
 }

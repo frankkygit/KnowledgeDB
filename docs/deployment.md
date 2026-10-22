@@ -1,6 +1,6 @@
 # GitHub Pages 上线
 
-当前上线范围：公开阅读器程序。`npm run preview:private` 使用的本地论文接口不会部署到 Pages；阅读器使用一次填写的 GitHub PAT 读取固定版本的私有 docs，并直接读写私有 comments。在线笔记新增、编辑和删除也会直接提交到私有 docs。PAT 需同时获得两库 Contents 读写权限，只留在当前标签页内存；SSH 仅用于本机提交。原文、翻译和评论不会因本次上线变为公开内容。
+当前上线范围：公开阅读器程序。`npm run preview:private` 使用的本地论文接口不会部署到 Pages；阅读器使用用户输入的 GitHub PAT 读取固定版本的私有 docs，并直接读写私有 comments。在线笔记新增、编辑和删除也会直接提交到私有 docs。PAT 需同时获得两库 Contents 读写权限；用户可选择七天本机浏览器存储以便刷新后自动连接。SSH 仅用于本机提交。原文、翻译和评论不会因本次上线变为公开内容。
 
 ## 首次设置
 
@@ -32,4 +32,4 @@ npm run preview
 
 先在 sources/docs 中提交并推送。然后在主库提交 sources/docs 的 gitlink，同时更新 release-manifest.json 和 site/public/reader-config.json 中 docs commit；三个值必须一致。推送主库后 Pages 自动构建，不需要 CI 读取私库或保存个人访问令牌。
 
-第一次创建网页令牌：GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens，同时选择 `KnowledgeDB-docs` 与 `KnowledgeDB-comments`，并为两个仓库都设为 Contents Read and write。进入阅读器时填写一次；令牌只在当前标签页内存使用，用户手动生成并粘贴到站点，不在聊天中提供。评论仓库 `frankkygit/KnowledgeDB-comments` 与分支 `main` 由 `site/public/reader-config.json` 配置，评论连接失败可在评论区重试，不会阻止 docs 阅读。
+第一次创建网页令牌：GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens，同时选择 `KnowledgeDB-docs` 与 `KnowledgeDB-comments`，并为两个仓库都设为 Contents Read and write。用户在阅读器中填写 PAT，可选“记住此浏览器（7 天）”；该选项会将 PAT 明文保存到本机浏览器，不应在共享或不可信设备上启用。也可不勾选，凭据仅在标签页会话范围恢复。令牌由用户手动生成并粘贴到站点，不在聊天中提供。评论仓库 `frankkygit/KnowledgeDB-comments` 与分支 `main` 由 `site/public/reader-config.json` 配置，评论连接失败可在评论区重试，不会阻止 docs 阅读。

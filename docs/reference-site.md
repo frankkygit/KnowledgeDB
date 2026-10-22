@@ -39,6 +39,6 @@
 | 评论展示和提交 | 浏览器复用共享 PAT 调用配置中的 comments 私库 GitHub API |
 | 公开构建产物 | 只有程序、通用资源和版本清单，没有私人正文和索引 |
 
-不把参考站的明文密码判断当成正文保密机制，也不继续采用先把正文公开发布、再用密码框遮住的方案。实际授权由 GitHub 私有仓库权限承担；令牌只在标签页内存使用，刷新后需重新连接。完整契约见 [浏览器直连 GitHub](browser-github-access.md)。
+不把参考站的明文密码判断当成正文保密机制，也不继续采用先把正文公开发布、再用密码框遮住的方案。实际授权由 GitHub 私有仓库权限承担；PAT 默认随标签页会话保留，用户可选七天本机存储以便刷新后自动连接。完整契约见 [浏览器直连 GitHub](browser-github-access.md)。
 
 GitHub Pages 本身是静态托管，不承担自建业务登录或评论接口；这里直接使用 [GitHub REST 的跨域支持](https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests) 和 [令牌认证](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api)。无需自备服务器或额外业务托管账户。

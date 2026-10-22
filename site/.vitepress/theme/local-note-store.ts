@@ -13,7 +13,7 @@ export class LocalNoteStore implements NotesStore {
   readonly namespace: string
   readonly branch = 'local'
   constructor(readonly repository = 'local-data/note-demo-git') { this.namespace = `local:${repository}:${this.branch}` }
-  async list(): Promise<{ notes: NoteRecord[]; head: string }> {
+  async list(_options?: { force?: boolean }): Promise<{ notes: NoteRecord[]; head: string }> {
     const data = await json('/__local_notes/catalog')
     return { notes: data.notes, head: data.head }
   }

@@ -81,6 +81,9 @@ h1 { margin: 0; color: #25394e; font-size: clamp(24px, 3vw, 34px); letter-spacin
 .connection-card button { padding: 12px; border: 0; border-radius: 8px; color: #fff; background: #32658e; }
 button:disabled { cursor: default; opacity: .55; }
 .connection-card a { color: #32658e; font-size: 14px; }
+.remember-choice { display: inline-flex; align-items: center; gap: 8px; margin: 4px 0 8px; color: #3d5269; font-size: 14px; }
+.remember-choice input { width: auto; margin: 0; accent-color: #32658e; }
+.stored-auth-retry { border: 1px solid #d7e1e9; border-radius: 7px; padding: 8px 11px; color: #32658e; background: #fff; }
 .disconnect-button { border: 1px solid #d7e1e9; border-radius: 7px; background: #fff; padding: 6px 10px; color: #52697c; white-space: nowrap; }
 .reader-error { padding: 16px; color: #9d342a; background: #fff1ee; border-radius: 8px; line-height: 1.7; }
 .search-results { margin-top: 18px; display: grid; gap: 10px; }

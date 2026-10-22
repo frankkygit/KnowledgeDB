@@ -7,6 +7,7 @@ import { RenderCache, renderCacheKey } from './render-cache'
 import ReaderComments from './ReaderComments.vue'
 import { GitHubNotesStore } from './github-notes'
 import type { NotesStore } from './note-store'
+import { clearCredential, readCredential, saveCredential } from './remember-browser'
 import 'katex/dist/katex.min.css'
 
 const sections = [{ id: 'papers', label: '论文' }, { id: 'notes', label: '笔记' }, { id: 'topics', label: '专题' }]
@@ -25,6 +26,10 @@ const selectedPaperId = ref('')
 const config = ref<ReaderConfig | null>(null)
 const commentStoreConfig = computed(() => commentsConfig(config.value))
 const tokenInput = ref('')
+const rememberBrowser = ref(false)
+const storedCredentialAvailable = ref(false)
+const credentialNotice = ref('')
+const notesEverVisited = ref(false)
 const sharedToken = ref('')
 const connected = ref(false)
 const notesStore = shallowRef<NotesStore | null>(null)
@@ -62,7 +67,7 @@ function updateActiveHeading() {
   activeHeadingId.value = active.id
 }
 function scheduleActiveHeading() {
-  if (!headingFrame) headingFrame = requestAnimationFrame(updateActiveHeading)
+  if (activeSection.value === 'papers' && !headingFrame) headingFrame = requestAnimationFrame(updateActiveHeading)
 }
 function observeArticleLayout() {
   headingObserver?.disconnect()
@@ -113,7 +118,11 @@ let localMode = false
 let generation = 0
 let documentGeneration = 0
 let objectUrls: string[] = []
-const selectedPaper = computed(() => activeSection.value === 'papers' ? papers.value.find(p => p.paperId === selectedPaperId.value) : null)
+let suppressAutoReconnect = false
+let paperScrollTop = 0
+let notesScrollTop = 0
+let notesSidebarScrollTop = 0
+const selectedPaper = computed(() => papers.value.find(p => p.paperId === selectedPaperId.value) || null)
 const activeDoc = computed(() => selectedPaper.value?.documents.find((d: any) => d.type === activeDocument.value))
 const needle = computed(() => query.value.normalize('NFC').trim().toLocaleLowerCase())
 const results = computed(() => needle.value ? searchItems.value.filter(i => i.paperId && `${i.title} ${i.sectionTitle} ${i.text}`.normalize('NFC').toLocaleLowerCase().includes(needle.value)).slice(0, 30) : [])
@@ -121,6 +130,7 @@ const visiblePapers = computed(() => needle.value ? papers.value.filter(p => `${
 
 function clearImages() { objectUrls.forEach(url => URL.revokeObjectURL(url)); objectUrls = [] }
 function disconnect(purgeCache = true) {
+  suppressAutoReconnect = true
   generation++; documentGeneration++
   sharedToken.value = ''
   client?.disconnect(); client = null; localMode = false
@@ -132,6 +142,29 @@ function disconnect(purgeCache = true) {
   renderedHtml.value = ''; selectedPaperId.value = ''; query.value = ''
   connected.value = false; connecting.value = false; loadingDocument.value = false
   loadStatus.value = '尚未连接资料库'; error.value = ''
+  notesEverVisited.value = false; paperScrollTop = 0; notesScrollTop = 0; notesSidebarScrollTop = 0
+}
+function credentialNamespace() {
+  return { base: withBase('/'), docs: config.value?.repository || '', comments: commentStoreConfig.value.repository }
+}
+function forgetAuthorization() {
+  const namespace = credentialNamespace()
+  const cleared = clearCredential(namespace.base, namespace.docs, namespace.comments)
+  storedCredentialAvailable.value = false; rememberBrowser.value = false
+  notesStore.value?.clearPrivateCache?.()
+  disconnect(true)
+  credentialNotice.value = cleared
+    ? '已退出并清除本机授权；未保存草稿仍保留在本机。'
+    : '已断开会话，但浏览器拒绝确认授权已删除；请在浏览器设置中清除此站点的数据。未保存草稿仍保留。'
+}
+function invalidateAuthorization() {
+  const namespace = credentialNamespace()
+  const cleared = clearCredential(namespace.base, namespace.docs, namespace.comments)
+  rememberBrowser.value = false
+  storedCredentialAvailable.value = false
+  disconnect(true)
+  credentialNotice.value = cleared ? '授权已失效，本机保存的授权已清除。' : '授权已失效；浏览器拒绝确认授权已删除，请在浏览器设置中清除此站点的数据。'
+  error.value = 'GitHub 返回 401；请重新连接有效的 PAT。'
 }
 
 function normalizeCatalog(catalog: any) {
@@ -189,8 +222,10 @@ async function showDocument(blockId = '') {
     })
     observeArticleLayout()
     article.value?.addEventListener('load', scheduleActiveHeading, true)
-    if (blockId) document.getElementById(`block-${blockId}`)?.scrollIntoView({ block: 'start' })
-    else window.scrollTo({ top: 0 })
+    if (activeSection.value === 'papers') {
+      if (blockId) document.getElementById(`block-${blockId}`)?.scrollIntoView({ block: 'start' })
+      else window.scrollTo({ top: 0 })
+    }
     loadingDocument.value = false
     if (article.value && (client || (import.meta.env.DEV && localMode))) {
       const reader = client
@@ -209,7 +244,8 @@ async function showDocument(blockId = '') {
           const mime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif' }
           const url = URL.createObjectURL(new Blob([bytes], { type: mime[ext || ''] || 'application/octet-stream' }))
           objectUrls.push(url); image.src = url
-        } catch {
+        } catch (cause) {
+          if (current === documentGeneration && session === generation && (cause as any)?.status === 401) { invalidateAuthorization(); return }
           if (current === documentGeneration) image.alt += '（图片读取失败）'
         }
       }
@@ -217,6 +253,7 @@ async function showDocument(blockId = '') {
     if (current !== documentGeneration) return
 
   } catch (cause) {
+    if (current === documentGeneration && session === generation && (cause as any)?.status === 401) { invalidateAuthorization(); return }
     if (current === documentGeneration && session === generation) error.value = cause instanceof Error ? cause.message : '文档读取失败，请重试。'
   } finally {
     if (current === documentGeneration) loadingDocument.value = false
@@ -225,12 +262,31 @@ async function showDocument(blockId = '') {
 
 async function selectSection(id: string) {
   if (commentsBusy.value) return
-  if (activeSection.value === 'notes' && offlineNotesRef.value && !await offlineNotesRef.value.confirmLeave()) return
+  if (activeSection.value === id) return
+  if (activeSection.value === 'notes' && id !== 'notes') {
+    notesScrollTop = window.scrollY
+    notesSidebarScrollTop = document.querySelector<HTMLElement>('.notes-sidebar')?.scrollTop || 0
+  }
+  if (id === 'notes') {
+    closeOutline()
+    if (headingFrame) cancelAnimationFrame(headingFrame)
+    headingFrame = 0
+    notesEverVisited.value = true
+    paperScrollTop = window.scrollY
+  }
   activeSection.value = id
   if (id === 'notes') window.history.replaceState(null, '', '#/notes')
   else if (id === 'papers' && selectedPaper.value) window.history.replaceState(null, '', `#/paper/${encodeURIComponent(selectedPaper.value.paperId)}`)
-  documentGeneration++; resetHeadingState(); clearImages(); renderedHtml.value = ''; loadingDocument.value = false
-  if (id === 'papers' && selectedPaper.value) await showDocument()
+  if (id === 'papers' && selectedPaper.value) {
+    await nextTick()
+    if (renderedHtml.value) window.scrollTo({ top: paperScrollTop })
+    else await showDocument()
+  } else if (id === 'notes') {
+    await nextTick()
+    window.scrollTo({ top: notesScrollTop })
+    const sidebar = document.querySelector<HTMLElement>('.notes-sidebar')
+    if (sidebar) sidebar.scrollTop = notesSidebarScrollTop
+  }
 }
 async function openPaper(paper: any) {
   if (commentsBusy.value) return
@@ -263,7 +319,7 @@ async function restoreRoute() {
   const [path, params = ''] = hash.split('?')
   const [, kind, rawId] = path.split('/')
   const id = rawId ? decodeURIComponent(rawId) : ''
-  if (kind === 'notes' || kind === 'note') { activeSection.value = 'notes'; return }
+  if (kind === 'notes' || kind === 'note') { activeSection.value = 'notes'; notesEverVisited.value = true; return }
   if (kind === 'document' && id) {
     const blockId = new URLSearchParams(params).get('block') || ''
     const paper = papers.value.find(p => p.documents.some((d: any) => d.documentId === id))
@@ -274,28 +330,41 @@ async function restoreRoute() {
 }
 async function connectWithToken() {
   const token = tokenInput.value
+  await connectUsingToken(token, rememberBrowser.value)
+}
+async function retryStoredAuthorization() {
+  const namespace = credentialNamespace()
+  const saved = readCredential(namespace.base, namespace.docs, namespace.comments)
+  if (!saved) { storedCredentialAvailable.value = false; return }
+  rememberBrowser.value = saved.remember
+  await connectUsingToken(saved.token, saved.remember, true)
+}
+async function connectUsingToken(token: string, remember: boolean, automatic = false) {
   disconnect(false)
+  suppressAutoReconnect = false
   connecting.value = true; loadStatus.value = '正在读取私有资料…'
   const session = generation
   try {
     if (!config.value) throw new Error('站点连接配置未加载，请刷新页面。')
     const reader = new GitHubDocs(config.value, token)
     client = reader
-    const catalog = await reader.json(config.value.catalogPath)
+    const [catalog, search] = await Promise.all([reader.json(config.value.catalogPath), reader.json(config.value.searchPath)])
     if (session !== generation) return
     papers.value = normalizeCatalog(catalog)
-    const search = await reader.json(config.value.searchPath)
-    if (session !== generation) return
     if (!Array.isArray(search.items)) throw new Error('全文索引格式不正确。')
     searchItems.value = search.items
+    const namespace = credentialNamespace()
+    if (!automatic) {
+      const storageComplete = saveCredential(token, remember, namespace.base, namespace.docs, namespace.comments)
+      storedCredentialAvailable.value = Boolean(readCredential(namespace.base, namespace.docs, namespace.comments))
+      credentialNotice.value = storageComplete ? '' : '本机授权存储或旧授权清理不完整；本次连接仍可使用，但浏览器中可能仍有旧授权，请检查此站点的存储设置。'
+    } else credentialNotice.value = ''
     const noteStore = new GitHubNotesStore(config.value.repository, token, config.value.notesBranch || 'main')
-    pendingNotesStore = noteStore
-    await noteStore.connect()
-    if (session !== generation || client !== reader) { noteStore.disconnect(); if (pendingNotesStore === noteStore) pendingNotesStore = null; return }
-    pendingNotesStore = null
+    if (session !== generation || client !== reader) { noteStore.disconnect(); return }
     notesStore.value = noteStore
     sharedToken.value = token
     connected.value = true; loadStatus.value = `已连接 · ${papers.value.length} 篇论文`
+    tokenInput.value = ''
     await restoreRoute()
   } catch (cause) {
     if (session !== generation) return
@@ -305,6 +374,9 @@ async function connectWithToken() {
     papers.value = []; searchItems.value = []; renderedHtml.value = ''; connected.value = false
     loadStatus.value = '连接未完成'
     error.value = cause instanceof Error ? cause.message : '连接失败，请检查网络。'
+    if ((cause as any)?.status === 401 || /令牌无效或已过期/.test(error.value)) {
+      invalidateAuthorization()
+    } else if (automatic) credentialNotice.value = '自动连接未成功，本机授权仍保留供稍后重试。'
   } finally { if (session === generation) connecting.value = false }
 }
 
@@ -345,6 +417,15 @@ onMounted(async () => {
     }
     if (connected.value) await restoreRoute()
   }
+  if (!connected.value && config.value && !suppressAutoReconnect) {
+    const namespace = credentialNamespace()
+    const saved = readCredential(namespace.base, namespace.docs, namespace.comments)
+    storedCredentialAvailable.value = Boolean(saved)
+    if (saved) {
+      rememberBrowser.value = saved.remember
+      await connectUsingToken(saved.token, saved.remember, true)
+    }
+  }
 })
 function leavePage() { disconnect(false) }
 function closeOutlineOutside(event: PointerEvent) { if (!outlineRoot.value?.contains(event.target as Node)) closeOutline() }
@@ -359,6 +440,7 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
       <a class="brand" :href="withBase('/')">知识库</a>
       <span class="status" role="status">{{ activeSection === 'notes' ? (notesStore?.kind === 'local-demo' ? '离线笔记演示 · 本地 Git，远端未接通' : notesStore ? `GitHub docs · ${notesStore.branch}` : loadStatus) : loadStatus }}</span>
       <button v-if="connected" class="disconnect-button" @click="disconnect()">断开连接</button>
+      <button v-if="connected" class="disconnect-button" @click="forgetAuthorization">退出并清除本机授权</button>
     </header>
     <div class="reader-grid" :class="{ 'notes-active': activeSection === 'notes' }">
       <aside class="sidebar" :class="{ open: menuOpen }">
@@ -381,14 +463,20 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
         <p class="sidebar-foot">{{ isDevelopment ? '本地或私库阅读' : '私人内容仅在授权后的当前会话加载。' }}</p>
       </aside>
       <main class="content" :class="{ 'notes-content': activeSection === 'notes' }">
-        <component :is="OfflineNotes" v-if="activeSection === 'notes' && notesStore" ref="offlineNotesRef" :sidebar-collapsed="notesSidebarCollapsed" :store="notesStore" @toggle-sidebar="notesSidebarCollapsed = !notesSidebarCollapsed" @select-section="selectSection" />
-        <div v-else-if="activeSection === 'notes' && !connected" class="connection-card">
+        <div v-if="notesEverVisited && notesStore" v-show="activeSection === 'notes'" class="notes-kept-workspace">
+          <KeepAlive><component :is="OfflineNotes" ref="offlineNotesRef" :active="activeSection === 'notes'" :sidebar-collapsed="notesSidebarCollapsed" :store="notesStore" @toggle-sidebar="notesSidebarCollapsed = !notesSidebarCollapsed" @select-section="selectSection" @auth-invalid="invalidateAuthorization" /></KeepAlive>
+        </div>
+        <div v-if="activeSection === 'notes' && !notesStore && !connected" class="connection-card">
           <p class="eyebrow">私人知识库</p><h1>连接你的资料库</h1><p>笔记将直接保存在私有 KnowledgeDB-docs 仓库。请选择有 Contents 读写权限的令牌。</p>
           <form @submit.prevent="connectWithToken"><label for="github-repository">资料仓库</label><input id="github-repository" :value="config?.repository || '正在加载配置…'" readonly /><label for="github-token">GitHub 资料库令牌</label><input id="github-token" v-model="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="授权私有 docs 仓库 Contents 读写权限" :disabled="connecting" /><button type="submit" :disabled="connecting || !config || !tokenInput.trim()">{{ connecting ? '正在连接…' : '连接并加载' }}</button></form>
-          <p class="hint">PAT 仅在当前标签页内存使用。请为同一 PAT 同时授予 docs 与 comments 私库的 Contents 读写权限。</p>
+          <label class="remember-choice"><input v-model="rememberBrowser" type="checkbox" />记住此浏览器（7 天）</label>
+          <p class="hint">勾选后 PAT 会明文保存在这台设备的浏览器本机存储中，最长 7 天；请仅在个人设备上使用。否则仅在标签页会话中恢复。</p>
+          <button v-if="storedCredentialAvailable" type="button" class="stored-auth-retry" :disabled="connecting" @click="retryStoredAuthorization">{{ connecting ? '正在验证本机授权…' : '使用本机授权重试' }}</button>
+          <p v-if="credentialNotice" class="hint" role="status">{{ credentialNotice }}</p>
         </div>
-        <div v-else-if="activeSection === 'notes'" class="empty-document"><h2>笔记库连接未完成</h2><p>{{ error || '请断开连接后重新输入有 docs Contents 读写权限的令牌。' }}</p><button type="button" @click="disconnect(false)">重新连接</button></div>
-        <div v-else-if="!connected" class="connection-card">
+        <div v-if="activeSection === 'notes' && !notesStore && connected" class="empty-document"><h2>笔记库连接未完成</h2><p>{{ error || '请检查 docs 笔记访问权限后重试。' }}</p></div>
+        <div v-show="activeSection !== 'notes'" class="paper-workspace">
+        <div v-if="!connected" class="connection-card">
           <p class="eyebrow">私人知识库</p><h1>连接你的资料库</h1>
           <p>连接后查看论文概述、中文翻译和全文搜索结果。</p>
           <form @submit.prevent="connectWithToken">
@@ -398,7 +486,10 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
             <input id="github-token" v-model="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="docs 与 comments 私库 Contents 读写权限" :disabled="connecting" />
             <button type="submit" :disabled="connecting || !config || !tokenInput.trim()">{{ connecting ? '正在连接…' : '连接并加载' }}</button>
           </form>
-          <p class="hint">PAT 只在当前标签页内存使用，刷新或断开后需要重新填写。请为 docs 与 comments 私库都授予 Contents 读写权限；请勿把令牌发到聊天中。</p>
+          <label class="remember-choice"><input v-model="rememberBrowser" type="checkbox" />记住此浏览器（7 天）</label>
+          <p class="hint">勾选后，PAT 会保存在这台设备的浏览器本机存储中，最长 7 天。请只在个人设备上使用，并为 docs 与 comments 私库都授予 Contents 读写权限。</p>
+          <button v-if="storedCredentialAvailable" type="button" class="stored-auth-retry" :disabled="connecting" @click="retryStoredAuthorization">{{ connecting ? '正在验证本机授权…' : '使用本机授权重试' }}</button>
+          <p v-if="credentialNotice" class="hint" role="status">{{ credentialNotice }}</p>
           <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建 fine-grained 令牌</a>
         </div>
         <template v-else>
@@ -414,10 +505,12 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
             <button type="button" class="outline-toggle" :aria-expanded="outlineOpen" :aria-label="outlineOpen ? '收起目录' : '展开目录'" @click="toggleOutline">{{ outlineOpen ? '收起目录' : '☰' }}</button>
             <button v-for="heading in headings" :key="heading.id" type="button" class="outline-item" :class="{ active: activeHeadingId === heading.id }" :aria-current="activeHeadingId === heading.id ? 'location' : undefined" :aria-label="heading.title" :title="heading.title" :style="{ '--outline-level': heading.level }" @click="jumpHeading(heading.id)"><span class="outline-mark" aria-hidden="true"></span><span class="outline-title">{{ heading.title }}</span></button>
           </nav>
-          <ReaderComments v-if="activeDoc" :doc="activeDoc" :article="article" :docs-commit="config?.ref || ''" :docs-repository="config?.repository || ''" :load-snapshot="loadSnapshot" :local-mode="localMode" :shared-token="sharedToken" :repository="commentStoreConfig.repository" :branch="commentStoreConfig.branch" :session-key="String(generation)" @busy="commentsBusy = $event" />
+          <ReaderComments v-if="activeDoc" :active="activeSection === 'papers'" :doc="activeDoc" :article="article" :docs-commit="config?.ref || ''" :docs-repository="config?.repository || ''" :load-snapshot="loadSnapshot" :local-mode="localMode" :shared-token="sharedToken" :repository="commentStoreConfig.repository" :branch="commentStoreConfig.branch" :session-key="String(generation)" @busy="commentsBusy = $event" @auth-invalid="invalidateAuthorization" />
           <button v-if="renderedHtml" class="back-to-top" type="button" aria-label="返回文档首行" @click="goTop">↑ 返回文首</button>
           <section v-if="!renderedHtml && !loadingDocument" class="empty-document"><h2>暂无可展示内容</h2><p>当前分类或文档尚未整理。</p></section>
         </template>
+        </div>
+        <p v-if="credentialNotice && activeSection !== 'papers'" class="hint" role="status">{{ credentialNotice }}</p>
         <p v-if="error" class="reader-error" role="alert">{{ error }}</p>
       </main>
     </div>

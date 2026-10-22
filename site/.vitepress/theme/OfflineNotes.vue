@@ -4,8 +4,11 @@ import { renderMarkdown } from './markdown'
 import { reconcileSavedNoteFilters } from './note-filters'
 import { claimOfflineNoteDraft, deleteOfflineNoteDraft, listActiveDraftTabIds, listOfflineNoteDrafts, releaseDraftTabLease, resolveDraftTabId, saveOfflineNoteDraft, writeDraftTabLease, type OfflineNoteDraft } from './note-drafts'
 import type { NotesStore, NoteRecord } from './note-store'
-const props = defineProps<{ sidebarCollapsed: boolean; store: NotesStore }>()
-const emit = defineEmits<{ (event: 'select-section', section: string): void; (event: 'toggle-sidebar'): void }>()
+const props = defineProps<{ active?: boolean; sidebarCollapsed: boolean; store: NotesStore }>()
+const emit = defineEmits<{ (event: 'select-section', section: string): void; (event: 'toggle-sidebar'): void; (event: 'auth-invalid'): void }>()
+function reportUnauthorized(cause: unknown, store = props.store, session = directorySession) {
+  if ((cause as { status?: number } | null)?.status === 401 && componentMounted && store === props.store && session === directorySession) emit('auth-invalid')
+}
 
 type Note = NoteRecord
 const notes = ref<Note[]>([])
@@ -88,6 +91,7 @@ let pendingDiscardAction: (() => void) | null = null
 let deleteAfterDiscard = false
 let pendingLeaveResolve: ((leave: boolean) => void) | null = null
 const preview = computed(() => renderMarkdown(editMarkdown.value, selected.value?.path || 'content/notes/new/index.md'))
+const readingHtml = computed(() => selected.value ? renderMarkdown(markdown.value, selected.value.path) : '')
 const baseFilteredNotes = computed(() => notes.value.filter(note =>
   (sourceFilter.value === 'all' || note.sourceKind === sourceFilter.value) &&
   (statusFilter.value === 'all' || note.status === statusFilter.value) &&
@@ -105,7 +109,7 @@ const shownTags = computed(() => {
 })
 const visible = computed(() => baseFilteredNotes.value.filter(note => !tagFilter.value.length || tagFilter.value.some(tag => (note.tags || []).includes(tag))).sort((a, b) => b.updated.localeCompare(a.updated)))
 
-async function refresh(keepSelection = true) {
+async function refresh(keepSelection = true, reopenSelected = true) {
   const store = props.store
   const session = directorySession
   const data = await store.list()
@@ -114,8 +118,9 @@ async function refresh(keepSelection = true) {
   head.value = data.head
   directoryReady.value = validDocsHead(data.head)
   directoryError.value = directoryReady.value ? '' : '笔记目录暂未加载完成，请重试。'
-  if (!keepSelection || !notes.value.some(note => note.documentId === selectedId.value)) selectedId.value = ''
-  if (selectedId.value && !editing.value) await openNote(selectedId.value)
+  const selectedRecord = notes.value.find(note => note.documentId === selectedId.value)
+  if (!keepSelection || !selectedRecord) { selectedId.value = ''; selected.value = null }
+  else if (selectedId.value && !editing.value && (reopenSelected || selected.value?.contentRevision !== selectedRecord.contentRevision)) await openNote(selectedId.value)
 }
 async function openNote(id: string, discardConfirmed = false) {
   if (dirty.value && !discardConfirmed) { requestDiscard(() => openNote(id, true)); return }
@@ -125,7 +130,9 @@ async function openNote(id: string, discardConfirmed = false) {
   selectedId.value = id
   const session = ++loadSession
   const store = props.store, directory = directorySession
-  const data = await store.get(id)
+  let data: Awaited<ReturnType<typeof store.get>>
+  try { data = await store.get(id) }
+  catch (cause) { reportUnauthorized(cause, store, directory); error.value = cause instanceof Error ? cause.message : '笔记读取失败。'; throw cause }
   if (!componentMounted || store !== props.store || directory !== directorySession || session !== loadSession || selectedId.value !== id) return
   selected.value = data.note
   markdown.value = data.markdown
@@ -187,13 +194,14 @@ function requestDelete(ids: string[], trigger?: HTMLElement) {
 async function deleteSelectedNotes() {
   if (deleteBusy.value || !deleteIds.value.length) return
   const operation = {}
+  const operationStore = props.store, operationSession = directorySession
   busyOwner = operation
   deleteBusy.value = true; busy.value = true; error.value = ''; message.value = ''
   const ids = [...deleteIds.value]
   const signature = JSON.stringify({ ids: [...ids].sort(), head: deleteHead.value })
   if (!pendingDelete.value || pendingDelete.value.signature !== signature) pendingDelete.value = { signature, id: crypto.randomUUID() }
   try {
-    const result = await props.store.deleteNotes(ids, deleteHead.value, pendingDelete.value.id)
+    const result = await operationStore.deleteNotes(ids, deleteHead.value, pendingDelete.value.id)
     loadSession++
     if (ids.includes(editorSourceDocumentId.value || '') && editing.value) {
       await clearActiveDraft()
@@ -212,11 +220,12 @@ async function deleteSelectedNotes() {
     if (currentWasDeleted) { selected.value = null; selectedId.value = ''; markdown.value = '' }
     message.value = `${ids.length} 篇笔记已删除；Git 历史版本已保留。`
     try {
-      const latest = await props.store.list()
+      const latest = await operationStore.list()
       notes.value = latest.notes; head.value = latest.head
-    } catch (cause) { error.value = `笔记已删除，但列表刷新失败：${cause instanceof Error ? cause.message : '请稍后刷新。'}` }
+    } catch (cause) { reportUnauthorized(cause, operationStore, operationSession); error.value = `笔记已删除，但列表刷新失败：${cause instanceof Error ? cause.message : '请稍后刷新。'}` }
     nextTick(restoreDeleteFocus)
   } catch (cause) {
+    reportUnauthorized(cause, operationStore, operationSession)
     error.value = cause instanceof Error ? cause.message : '删除失败；笔记与选择仍保留。'
   } finally { if (busyOwner === operation) busy.value = false; deleteBusy.value = false }
 }
@@ -451,11 +460,13 @@ async function save() {
       if (busyOwner !== operation || !componentMounted || store !== props.store || storeSession !== directorySession) return
       await openNote(data.note.documentId)
     } catch (cause) {
+      reportUnauthorized(cause, store, storeSession)
       if (busyOwner === operation && componentMounted && store === props.store && storeSession === directorySession) {
         error.value = `已保存，但读取失败：${cause instanceof Error ? cause.message : '请刷新目录后重新打开。'}`
       }
     }
   } catch (cause) {
+    reportUnauthorized(cause, store, storeSession)
     if (componentMounted && store === props.store && storeSession === directorySession && session === editSession) error.value = cause instanceof Error ? cause.message : '保存失败。输入仍保留在编辑器中。'
   } finally { if (busyOwner === operation) busy.value = false }
 }
@@ -633,6 +644,7 @@ async function initialize(retry = false) {
   if (!componentMounted || store !== props.store || session !== directorySession) return
   try { await refresh(retry) }
   catch (cause) {
+    reportUnauthorized(cause, store, session)
     if (componentMounted && store === props.store && session === directorySession) {
       directoryError.value = '笔记目录暂未加载完成，请重试。'
       error.value = directoryError.value
@@ -640,6 +652,13 @@ async function initialize(retry = false) {
   } finally { if (componentMounted && store === props.store && session === directorySession) directoryLoading.value = false }
 }
 onMounted(() => { componentMounted = true; void initialize() })
+let didInitialize = false
+watch(() => props.active, active => {
+  if (!active || !didInitialize || !directoryReady.value) return
+  const store = props.store, session = directorySession
+  void refresh(true, false).catch(cause => reportUnauthorized(cause, store, session))
+})
+onMounted(() => { didInitialize = true })
 watch(() => props.store, () => { editSession++; busyOwner = null; busy.value = false; void initialize() })
 watch([editing, title, tagsText, status, editMarkdown, pendingAssets, editorBaseHead], scheduleDraftSave)
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
@@ -653,9 +672,13 @@ function persistBeforePageHide() { void persistActiveDraft(); if (tabDraftId.val
 onBeforeUnmount(() => { componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
 onBeforeUnmount(() => { objectUrls.forEach(url => URL.revokeObjectURL(url)) })
 defineExpose({ hasUnsavedChanges: () => dirty.value, confirmLeave })
-watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previewMode], async () => {
+let assetLoadGeneration = 0
+watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previewMode, () => props.active], async () => {
+  const store = props.store, directory = directorySession, session = loadSession
+  const docId = selected.value?.documentId, generation = ++assetLoadGeneration
   objectUrls.forEach(url => URL.revokeObjectURL(url)); objectUrls.length = 0
   await nextTick()
+  if (!componentMounted || !props.active || store !== props.store || directory !== directorySession || session !== loadSession || generation !== assetLoadGeneration || docId !== selected.value?.documentId) return
   for (const root of [readerRoot.value, previewRoot.value]) {
     if (!root) continue
     for (const image of root.querySelectorAll<HTMLImageElement>('img[data-kb-asset]')) {
@@ -663,11 +686,16 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
       const name = asset.split('/').pop() || ''
       const pending = pendingAssets.value.find(item => item.name === name)
       if (pending) { image.src = `data:${pending.type};base64,${pending.base64}`; continue }
-      const docId = selected.value?.documentId
       if (!docId) continue
+      const activeRoot = root
       try {
-        const objectUrl = URL.createObjectURL(await props.store.asset(docId, name)); objectUrls.push(objectUrl); image.src = objectUrl
-      } catch { image.alt += '（图片读取失败）' }
+        const blob = await store.asset(docId, name)
+        if (!componentMounted || !props.active || store !== props.store || directory !== directorySession || session !== loadSession || generation !== assetLoadGeneration || docId !== selected.value?.documentId || activeRoot !== readerRoot.value && activeRoot !== previewRoot.value) continue
+        const objectUrl = URL.createObjectURL(blob); objectUrls.push(objectUrl); image.src = objectUrl
+      } catch (cause) {
+        if (componentMounted && props.active && store === props.store && directory === directorySession && session === loadSession && generation === assetLoadGeneration && docId === selected.value?.documentId) reportUnauthorized(cause, store, directory)
+        image.alt += '（图片读取失败）'
+      }
     }
   }
 })
@@ -711,7 +739,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
         <template v-else-if="selected">
           <div class="note-view-actions"><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !draftScopeReady || !directoryReady" @click="beginEdit(false)">编辑笔记</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div><p class="eyebrow">{{ selected.sourceKind === 'blog' ? 'Blog 阅读记录' : '个人笔记' }} · {{ selected.status === 'draft' ? '草稿' : '正式' }}</p><h2>{{ selected.title }}</h2><p class="hint">{{ selected.tags.join(' · ') }} · 更新于 {{ date(selected.updated) }}</p>
           <div v-if="selected.sourceKind === 'blog'" class="source-card"><strong>原始出处</strong><p>{{ selected.sources?.[0]?.originalTitle }} · {{ selected.sources?.[0]?.author || '作者待核对' }} · {{ selected.sources?.[0]?.siteName }}</p><a v-if="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" :href="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" target="_blank" rel="noopener noreferrer">{{ selected.sources?.[0]?.canonicalUrl }}</a><p>访问于 {{ selected.sources?.[0]?.accessedAt }}</p></div>
-          <article ref="readerRoot" class="document-body note-read-body" v-html="renderMarkdown(markdown, selected.path)" />
+          <article ref="readerRoot" class="document-body note-read-body" v-html="readingHtml" />
         </template>
           <div v-else class="empty-document"><h2>选择一篇笔记开始</h2><p>Blog 和个人笔记平铺显示，可组合筛选、编辑并保存。</p><button type="button" class="action-button action-primary save-note-button" :disabled="!draftScopeReady" @click="beginEdit(true)">＋ 新建笔记</button></div>
       </div>

@@ -37,7 +37,7 @@ flowchart TD
     I --> D
 ```
 
-Git 是正式存储，浏览器内的讨论视图与索引缓存可重建。Pages 不运行业务后端。浏览器不会因为已经登录 github.com 就自动拥有 API 权限；个人版通过手动填写的 fine-grained PAT 连接私库，令牌只在当前标签页内存保存，刷新后需重新填写。
+Git 是正式存储，浏览器内的讨论视图与索引缓存可重建。Pages 不运行业务后端。浏览器不会因为已经登录 github.com 就自动拥有 API 权限；个人版通过手动填写的 fine-grained PAT 连接私库。默认凭据留在标签页会话中；用户可选择将 PAT 保存在本机浏览器七天，以便刷新后自动连接。
 
 完整连接、权限及失败处理见 [浏览器直连 GitHub](browser-github-access.md)。技术依据包括 [GitHub REST 跨域支持](https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests)、[令牌认证](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api) 和 [Git 对象写入](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database)。
 
@@ -122,7 +122,7 @@ knowledge_db/
 
 ## 6. 授权、保存与发布
 
-- 用户一次输入的 PAT 需对 docs 与 comments 私库均授予 Contents 读写权限；同一令牌只保存在当前标签页内存。令牌不嵌入网页、不写持久存储、不提交 Git，不在聊天中收集。评论连接失败不得阻止 docs 阅读。
+- 用户一次输入的 PAT 需对 docs 与 comments 私库均授予 Contents 读写权限；默认保存在标签页会话中，选择“记住此浏览器（7 天）”时明文保存在本机浏览器。令牌不嵌入网页、不写入 URL、源码、构建产物或日志、不提交 Git，不在聊天中收集。评论连接失败不得阻止 docs 阅读。
 - 页面密码只控制入口体验，不用于兑换 GitHub 权限。第一版不设服务端 session、Cookie 登录或自建评论 HTTP 接口。
 - 私人正文、搜索索引、附件、快照和评论只通过私库 API 进入浏览器内存；Pages 发布采用公开文件白名单，不含这些数据及其静态预渲染副本。
 - 浏览器适配器校验字段、引用、修订和文件路径，GitHub 校验仓库权限；单用户客户端业务校验可被手动 API 请求绕过，CI 需重放并校验操作链。
@@ -167,7 +167,7 @@ M2/M3 本地演示不算已实现线上持久化；M4/M5 完成后才可日常�
 | 无授权直接获取 Pages HTML/JS/索引/路由/附件 | 只能取得公开程序和版本元信息，找不到测试私人内容 |
 | 令牌无权限、过期、被撤销或限流 | 显示原因，停止相应读写，保留草稿 |
 | 评论仓库权限缺失 | docs 仍可阅读和搜索；评论区显示连接错误并允许无令牌重试，不伪造保存成功 |
-| 退出、刷新及检查本地持久存储 | 令牌不持久保存；私人缓存清理；重新连接体验符合说明 |
+| 退出、刷新及检查本地持久存储 | sessionStorage 刷新恢复；可选七天明文本机授权；退出清理凭据与私人缓存 |
 | Agent 更新、子库备份恢复 | 人工笔记、评论、原引用和链接历史完整 |
 | 单日单文档分片超限 | 开下一片，跨片聚合不漏条，不生成全库大 JSON |
 | 分支规则拒绝写入 | 明确报错，不强制推送或修改规则 |

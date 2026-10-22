@@ -151,9 +151,9 @@ Pages 不提供自建 HTTP API。以下是浏览器内函数，不是 /api 路�
 
 | 操作 | 作用 | 核心参数 |
 | --- | --- | --- |
-| connectDocs | 连接私有正文库 | docs 仓库配置、只读 token，仅内存 |
-| connectComments | 连接私有评论库 | comments 仓库配置、读写 token，仅内存 |
-| disconnect | 清理当前会话数据 | 令牌、内存索引、正文、Blob URL |
+| connectDocs | 连接私有正文库 | docs 仓库配置、用户输入 token，标签页会话或用户选择的七天本机存储 |
+| connectComments | 连接私有评论库 | comments 仓库配置、共享 token；失败不阻塞 docs |
+| disconnect | 清理当前会话数据 | 内存令牌、内存索引、正文、Blob URL；保留用户选择的浏览器凭据 |
 | listThreads | 分页讨论摘要及定位状态 | documentId、docsCommit、commentsCommit、cursor、limit |
 | listComments | 某组讨论的分页评论 | threadId、固定版本对、cursor、limit |
 | createThread | 创建讨论与首评 | requestId、threadId、documentId、docsCommit、expectedContentRevision、anchor、body |
