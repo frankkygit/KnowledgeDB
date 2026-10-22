@@ -154,9 +154,12 @@ class MockGitHub {
 function seedFiles() {
   return { "catalog/papers.json": JSON.stringify({ schemaVersion: 1, papers: [{ paperId: "paper-synthetic", title: "Synthetic paper", documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", contentRevision: "sha256:" + "a".repeat(64) }] }] }), "catalog/documents.json": JSON.stringify({ schemaVersion: 1, documents: [{ documentId: "doc-paper", type: "analysis", path: "content/papers/synthetic/analysis.md", title: "Synthetic paper", status: "published", contentRevision: "sha256:" + "a".repeat(64) }] }), "catalog/search.json": JSON.stringify({ schemaVersion: 1, normalizationVersion: "kb-text-v1", items: [{ paperId: "paper-synthetic", documentId: "doc-paper", type: "analysis", title: "Synthetic paper", sectionTitle: "Preserved", blockId: "b-paper", text: "Must remain in paper search", contentRevision: "sha256:" + "a".repeat(64) }] }), "content/papers/synthetic/analysis.md": "# Synthetic paper\n\n<!-- kb:block b-paper -->\nPreserve this paper.\n", ["revisions/doc-paper/" + "a".repeat(64) + ".json"]: JSON.stringify({ documentId: "doc-paper", contentRevision: "sha256:" + "a".repeat(64), paragraphs: [] }), "annotations/2026/10/21/doc-paper.jsonl": "{\"operationId\":\"preserve-comment\"}\n" };
 }
-const built = await build({ stdin: { contents: "export {GitHubNotesStore} from './site/.vitepress/theme/github-notes.ts'; export {buildNoteContent,editableNoteMarkdown} from './site/.vitepress/theme/note-content.ts'", resolveDir: process.cwd(), sourcefile: "check-notes-entry.ts", loader: "ts" }, bundle: true, platform: "node", format: "esm", write: false, logLevel: "silent" });
-const { GitHubNotesStore, buildNoteContent, editableNoteMarkdown } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
+const built = await build({ stdin: { contents: "export {GitHubNotesStore} from './site/.vitepress/theme/github-notes.ts'; export {buildNoteContent,editableNoteMarkdown} from './site/.vitepress/theme/note-content.ts'; export {formatNoteDate} from './site/.vitepress/theme/note-date.ts'", resolveDir: process.cwd(), sourcefile: "check-notes-entry.ts", loader: "ts" }, bundle: true, platform: "node", format: "esm", write: false, logLevel: "silent" });
+const { GitHubNotesStore, buildNoteContent, editableNoteMarkdown, formatNoteDate } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
 async function checkContent() {
+  assert.equal(formatNoteDate("2026-10-21"), "2026-10-21", "Legacy date-only timestamps must not gain an invented time");
+  const timestamp = "2026-10-21T12:34:56.789Z";
+  assert.equal(formatNoteDate(timestamp), new Date(timestamp).toLocaleString(), "Timestamped note dates should display their local time");
   const input = { documentId: "note-review-content", sourceDocumentId: null, sourceKind: "personal", title: "\u89C4\u8303\u5185\u5BB9", tags: ["A"], status: "draft", sources: [], markdown: "# Heading\n\nAlpha plain.\n\n- ListOnlyNeedle\n\n```js\nCodeOnlyNeedle\n```\n\n| H |\n|---|\n| TableOnlyNeedle |\n\n$$\nMathOnlyNeedle\n$$\n\n![ImageOnlyNeedle](assets/synthetic.png)", assets: [] };
   const assets = /* @__PURE__ */ new Map([["content/notes/note-review-content/assets/synthetic.png", new Uint8Array([1, 2, 3])]]);
   const a = await buildNoteContent(input, "", assets, "2026-10-21", "2026-10-21");
@@ -248,6 +251,11 @@ async function checkAdapter() {
     const notes = JSON.parse(files.get("catalog/notes.json"));
     assert.equal(notes.notes.length, 1);
     assert.equal(notes.notes[0].status, "draft");
+    assert.match(notes.notes[0].created, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.match(notes.notes[0].updated, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const noteBody = files.get(notes.notes[0].path);
+    assert.ok(noteBody.includes(`created: ${JSON.stringify(notes.notes[0].created)}`), "Frontmatter created must match the catalog timestamp");
+    assert.ok(noteBody.includes(`updated: ${JSON.stringify(notes.notes[0].updated)}`), "Frontmatter updated must match the catalog timestamp");
     assert.match(notes.notes[0].contentRevision, /^sha256:[a-f0-9]{64}$/);
     const revisionPath = `revisions/${input.documentId}/${notes.notes[0].contentRevision.slice(7)}.json`;
     assert.ok(files.has(revisionPath));
@@ -344,6 +352,7 @@ async function checkFixedReads() {
     assert.ok(before.identityMarkdown.includes("<!-- kb:block"));
     const changed = { ...input, sourceDocumentId: input.documentId, markdown: before.markdown.replace("Original fixed paragraph.", "Externally updated paragraph."), sources: [{ canonicalUrl: "javascript:alert(1)", originalTitle: "Tampered attribution" }], assets: [] };
     const second = await writer.save(changed, first.head, crypto.randomUUID());
+    assert.equal(second.note.created, first.note.created, "Updating a note must preserve its original created timestamp");
     assert.deepEqual(second.note.sources, input.sources, "Original Blog attribution must not be overwritten");
     const refReads = mock.requests.filter((r) => r.path.startsWith("git/ref/")).length;
     const old = await reader.get(input.documentId);

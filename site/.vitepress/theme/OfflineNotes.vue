@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderMarkdown } from './markdown'
 import { reconcileSavedNoteFilters } from './note-filters'
+import { formatNoteDate } from './note-date'
 import { claimOfflineNoteDraft, deleteOfflineNoteDraft, listActiveDraftTabIds, listOfflineNoteDrafts, releaseDraftTabLease, resolveDraftTabId, saveOfflineNoteDraft, writeDraftTabLease, type OfflineNoteDraft } from './note-drafts'
 import type { NotesStore, NoteRecord } from './note-store'
 const props = defineProps<{ active?: boolean; sidebarCollapsed: boolean; store: NotesStore }>()
@@ -472,7 +473,7 @@ async function save() {
 }
 function toggleTag(tag: string) { tagFilter.value = tagFilter.value.includes(tag) ? tagFilter.value.filter(item => item !== tag) : [...tagFilter.value, tag] }
 function clearFilters() { sourceFilter.value = 'all'; statusFilter.value = 'all'; tagFilter.value = []; search.value = '' }
-function date(value: string) { return new Date(value).toLocaleString() }
+function date(value: string) { return formatNoteDate(value) }
 function safeSourceUrl(value: unknown) {
   if (typeof value !== 'string') return ''
   try { const url = new URL(value); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '' } catch { return '' }

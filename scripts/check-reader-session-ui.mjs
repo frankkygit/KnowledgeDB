@@ -183,6 +183,7 @@ try {
     if (name === 'vue') return { ...vue, onMounted: callback => hooks.mounted.push(callback), onBeforeUnmount: callback => hooks.unmounted.push(callback) }
     if (name === './markdown') return { renderMarkdown: () => '' }
     if (name === './note-filters') return { reconcileSavedNoteFilters: (_note, filters) => filters }
+    if (name === './note-date') return { formatNoteDate: value => value }
     if (name === './note-drafts') return {
       resolveDraftTabId: async () => 'tab-session-ui', writeDraftTabLease: async () => {}, listOfflineNoteDrafts: async () => [],
       listActiveDraftTabIds: async () => new Set(), saveOfflineNoteDraft: async () => {}, claimOfflineNoteDraft: async () => ({}),

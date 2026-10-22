@@ -24,7 +24,6 @@ function parseJson(bytes: Uint8Array, label: string): any {
   catch { throw new Error(`${label} 格式无效；已停止保存，以保护现有目录。`) }
 }
 function validId(value: string) { return /^note-[A-Za-z0-9-]+$/.test(value) }
-function dateStamp(value: string) { return new Date(value).toISOString().slice(0, 10) }
 
 export class GitHubNotesStore implements NotesStore {
   readonly kind = 'github' as const
@@ -251,7 +250,7 @@ export class GitHubNotesStore implements NotesStore {
       if (!entry || !oldAssetPaths.includes(path)) throw new Error(`正文引用了未上传或不属于此笔记的图片：${path}`)
       allAssetBytes.set(path, await this.readBlob(entry.sha))
     }
-    const content = await buildNoteContent(safeInput, oldMarkdown, allAssetBytes, created || dateStamp(now), dateStamp(now))
+    const content = await buildNoteContent(safeInput, oldMarkdown, allAssetBytes, created || now, now)
     const revisionHash = content.snapshot.contentRevision.slice('sha256:'.length)
     const snapshotPath = `revisions/${input.documentId}/${revisionHash}.json`
     const snapshotBytes = new TextEncoder().encode(`${JSON.stringify(content.snapshot, null, 2)}\n`)
@@ -262,7 +261,7 @@ export class GitHubNotesStore implements NotesStore {
     }
     const note: NoteRecord & { contentRevision: string } = {
       documentId: input.documentId, sourceKind: input.sourceKind, title: input.title.normalize('NFC').trim(), status: input.status,
-      tags: [...new Set(input.tags.map(tag => tag.normalize('NFC').trim()).filter(Boolean))], created: created || dateStamp(now), updated: dateStamp(now),
+      tags: [...new Set(input.tags.map(tag => tag.normalize('NFC').trim()).filter(Boolean))], created: created || now, updated: now,
       sources: input.sourceKind === 'blog' ? safeInput.sources : [], path: notePath, contentRevision: content.contentRevision,
     }
     const notes = { ...state.notes, schemaVersion: 1, notes: [...state.notes.notes.filter((item: any) => item.documentId !== note.documentId), note], requests: { ...state.notes.requests, [requestId]: { payloadHash, documentId: note.documentId } } }

@@ -67,6 +67,8 @@ operations/notes/<requestId>.json       # 保存幂等凭据，建议新增
 
 建议 catalog/notes.json 使用 schemaVersion: 1，notes 数组项含 documentId、path、contentRevision、sourceKind（blog / personal）、title、status、tags、created、updated、sources。正文沿用现有数据契约，使用 type: notes，并增加 sourceKind、language 字段；非论文的 paperId 为空。前置元数据和 catalog 同次生成，不能各自手工维护而产生不同值。Blog 的来源信息必填，个人笔记的 sources 可为空；网页修改 Blog 正文不会将其来源变为 personal。
 
+新建笔记的 `created` 与每次保存的 `updated` 写入完整 ISO 8601 时间戳；已有 `created` 原样保留。历史上只有 `YYYY-MM-DD` 的值在界面仍只显示日期，不补造时间。
+
 快照仍使用现有规范 AST 和 contentRevision 算法；新增元数据的哪些字段参与版本摘要必须在共享规范中明确，并对旧文档保持兼容。既有论文条目与 schema 不批量重写；新笔记目录作为可选配置接入，旧配置缺少该路径时显示空笔记入口。
 
 Agent 再次整理 Blog 时先读取同一 documentId 的最新正文，生成更新候选和差异，不新建重复笔记，也不直接覆盖人工修订。用户在线增加的理解和修正保留；重叠修改保留双方版本供审阅，确认后再通过统一保存管线更新该文档。生成过程与最近一次编辑者可另记到操作记录或 Git 历史，不用 sourceKind 表示最近编辑者。草稿通过私有草稿列表和独立草稿索引可检索，正式列表默认排除草稿。审核转正式时移动路径但保持 ID。

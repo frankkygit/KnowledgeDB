@@ -22,6 +22,7 @@ function harness(store, drafts = []) {
     if (name === 'vue') return { ...vue, onMounted: fn => hooks.mounted.push(fn), onBeforeUnmount: fn => hooks.unmounted.push(fn) }
     if (name.endsWith('/markdown') || name === './markdown') return { renderMarkdown: () => '' }
     if (name.endsWith('/note-filters') || name === './note-filters') return { reconcileSavedNoteFilters: (_note, f) => f }
+    if (name.endsWith('/note-date') || name === './note-date') return { formatNoteDate: value => value }
     if (name.endsWith('/note-drafts') || name === './note-drafts') return {
       resolveDraftTabId: async () => 'tab-a', writeDraftTabLease: async()=>{}, listOfflineNoteDrafts: async()=>drafts,
       listActiveDraftTabIds: async()=>new Set(), saveOfflineNoteDraft: async draft => { drafts.splice(0, drafts.length, draft) },
