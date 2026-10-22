@@ -126,7 +126,7 @@ button:disabled { cursor: default; opacity: .55; }
 .tag-expand-button svg.rotated { transform: rotate(180deg); }
 .tag-count-hint { grid-column: 2; margin-top: -6px; color: #8998a8; font-size: 10px; line-height: 1.45; }
 .tag-filters small { padding: 8px 0; color: #91a0b0; font-size: 12px; }
-.note-list { min-height: 0; display: grid; align-content: start; gap: 2px; overflow: auto; }
+.note-list { min-height: 0; display: grid; align-content: start; gap: 2px; overflow: auto; padding-right: 6px; scrollbar-gutter: stable; }
 .note-list-heading, .note-selection-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 8px 4px; }
 .note-list-heading strong { color: #596f86; font-size: 12px; font-weight: 600; }
 .note-list-heading button, .note-selection-toolbar button { border: 1px solid transparent; border-radius: 6px; padding: 6px 8px; color: #256395; background: transparent; font: inherit; font-size: 12px; }
@@ -134,18 +134,21 @@ button:disabled { cursor: default; opacity: .55; }
 .note-selection-toolbar label { display: inline-flex; align-items: center; gap: 5px; }
 .note-selection-toolbar input { margin: 0; accent-color: #32658e; }
 .note-selection-toolbar .note-delete-button { margin-left: auto; }
-.note-list-row { position: relative; display: flex; align-items: stretch; gap: 3px; min-width: 0; border: 1px solid transparent; border-radius: 7px; color: #142744; background: #fff; }
+.note-list-row { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; gap: 3px; min-width: 0; border: 1px solid transparent; border-radius: 7px; color: #142744; background: #fff; }
 .note-list-row.selected { border-color: #91c5fb; background: linear-gradient(110deg,#f0f8ff,#fff); }
 .note-list-row.is-checked { border-color: #ccd9e7; background: #f8fafc; }
 .note-list-row > input { margin: 14px 0 0 10px; align-self: flex-start; accent-color: #32658e; }
-.note-row-open { position: relative; display: grid; flex: 1 1 auto; gap: 4px; min-width: 0; padding: 10px 11px; border: 0; color: inherit; background: transparent; text-align: left; }
-.note-row-open strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; }
+.note-row-open { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; padding: 10px 8px 10px 11px; border: 0; color: inherit; background: transparent; text-align: left; }
+.note-row-open strong { flex: 1 0 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; }
 .note-row-open small, .note-row-open time { color: #617997; font-size: 11px; line-height: 1.4; }
-.note-row-open time { position: absolute; right: 10px; bottom: 10px; }
+.note-row-open small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-row-open time { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
 .note-row-menu { position: relative; align-self: flex-start; margin: 5px 5px 0 0; }
 .note-row-menu-trigger { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 6px; color: #526b83; background: transparent; font-size: 19px; line-height: 1; opacity: .45; }
 .note-list-row:hover .note-row-menu-trigger, .note-row-menu-trigger:focus-visible, .note-row-menu-trigger[aria-expanded="true"] { opacity: 1; }
-.note-row-menu-popup { position: absolute; z-index: 5; top: 31px; right: 0; min-width: 130px; padding: 4px; border: 1px solid #dce4ec; border-radius: 7px; background: #fff; box-shadow: 0 6px 20px #1a2c3c20; }
+.note-row-menu:has(.note-row-menu-trigger[aria-expanded="true"]) { display: contents; }
+.note-row-menu-trigger[aria-expanded="true"] { order: 1; margin-left: auto; }
+.note-row-menu-popup { position: static; order: 2; flex: 1 1 calc(100% - 10px); min-width: 0; margin: 0 5px 5px; padding: 4px; border: 1px solid #dce4ec; border-radius: 7px; background: #fff; box-shadow: 0 4px 12px #1a2c3c14; }
 .note-row-menu-popup button { width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; color: #a12e2e; background: #fff; text-align: left; font: inherit; font-size: 12px; }
 .note-row-menu-popup button:hover { background: #fff2f1; }
 .note-delete-button { border: 1px solid #a84646 !important; border-radius: 6px; padding: 7px 9px; color: #a12e2e !important; background: #fff !important; font: inherit; font-size: 12px; }
