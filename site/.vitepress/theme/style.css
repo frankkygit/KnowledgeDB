@@ -200,12 +200,15 @@ button:disabled { cursor: default; opacity: .55; }
 .note-meta select { padding: 5px 19px 5px 3px; border: 0; color: #314969; background: #fff; font: inherit; }
 .note-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .note-tags button { padding: 5px 9px; border: 0; border-radius: 999px; color: #075ba8; background: #e7f3ff; font-size: 12px; }
-.note-tags input { width: 150px; padding: 5px 8px; border: 0; border-radius: 6px; background: #f4f7fa; font: inherit; font-size: 12px; }
+.note-tags input { width: 150px; min-width: 0; padding: 5px 8px; border: 0; border-radius: 6px; background: #f4f7fa; font: inherit; font-size: 12px; }
+.note-tags .add-tag-button { width: 28px; height: 28px; padding: 0; border: 1px dashed #9bb8d2; border-radius: 999px; color: #075ba8; background: #fff; font-size: 18px; line-height: 1; }
 .editor-toolbar { min-height: 46px; display: flex; align-items: center; gap: 3px; padding: 4px 7px; border: 1px solid #dce5ed; border-radius: 8px 8px 0 0; background: #fff; }
 .editor-toolbar button { min-width: 34px; height: 34px; padding: 0 8px; border: 0; border-radius: 5px; color: #172e50; background: transparent; font-size: 16px; }
 .editor-toolbar button:hover { background: #eff5fa; }
 .editor-toolbar i { width: 1px; height: 25px; margin: 0 4px; background: #e0e7ee; }
-.editor-toolbar span { flex: 1; }
+.editor-toolbar span { flex: 1; min-width: 8px; }
+.editor-toolbar .preview-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; min-width: max-content; height: 34px; padding: 0 9px; border: 1px solid #dce5ed; border-radius: 6px; font-size: 13px; }
+.editor-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
 .note-editor-wrap { position: relative; min-height: min(58vh, 680px); border: 1px solid #dce5ed; border-top: 0; border-radius: 0 0 8px 8px; background: white; }
 .note-editor-wrap textarea { display: block; width: 100%; min-height: min(58vh, 680px); resize: vertical; padding: 18px 16px; border: 0; border-radius: inherit; outline-color: #a9cdef; color: #142744; background: transparent; font: 15px/1.85 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
 .note-editor-wrap textarea::placeholder { color: #91a0b0; }
@@ -264,7 +267,7 @@ button:disabled { cursor: default; opacity: .55; }
   .editor-footer { flex-wrap: wrap; }
   .editor-footer > span:nth-child(2) { order: 5; flex-basis: 100%; text-align: left; }
 }
-@media (max-width: 420px) { .notes-heading .offline-status { display: none; } .note-meta { gap: 5px; } .note-tags input { width: 110px; } .editor-toolbar button { min-width: 30px; padding: 0 6px; } }
+@media (max-width: 420px) { .notes-heading .offline-status { display: none; } .note-meta { gap: 5px; } .note-tags input { width: 110px; } .editor-toolbar { gap: 2px; padding-inline: 4px; } .editor-toolbar button { min-width: 30px; padding: 0 6px; } .editor-toolbar .preview-toggle { min-width: max-content; padding: 0 7px; } }
 .block-anchor { display: block; scroll-margin-top: 30px; }
 .math-display { overflow-x: auto; }
 .image-unavailable { color: #7c8997; font-size: 13px; }

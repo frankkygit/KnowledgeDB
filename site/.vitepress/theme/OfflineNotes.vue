@@ -42,6 +42,10 @@ const creating = ref(false)
 const discardPrompt = ref(false)
 const title = ref('')
 const tagsText = ref('')
+const tagInput = ref('')
+const tagInputOpen = ref(false)
+const tagInputElement = ref<HTMLInputElement | null>(null)
+const confirmedTags = computed(() => tagsText.value.split(/[,，]/).map(tag => tag.trim()).filter(Boolean))
 const status = ref<'draft' | 'published'>('draft')
 const editMarkdown = ref('')
 const pendingAssets = ref<{ name: string; type: string; base64: string }[]>([])
@@ -87,7 +91,7 @@ let draftRevision = 0
 const objectUrls: string[] = []
 const editBaseline = ref('')
 const pendingRequest = ref<{ signature: string; id: string } | null>(null)
-const dirty = computed(() => editing.value && `${title.value}\n${tagsText.value}\n${status.value}\n${editMarkdown.value}` !== editBaseline.value)
+const dirty = computed(() => editing.value && `${title.value}\n${tagsText.value}\n${tagInput.value}\n${status.value}\n${editMarkdown.value}` !== editBaseline.value)
 let pendingDiscardAction: (() => void) | null = null
 let deleteAfterDiscard = false
 let pendingLeaveResolve: ((leave: boolean) => void) | null = null
@@ -127,7 +131,7 @@ async function openNote(id: string, discardConfirmed = false) {
   if (dirty.value && !discardConfirmed) { requestDiscard(() => openNote(id, true)); return }
   editSession++
   void clearActiveDraft()
-  editing.value = false; creating.value = false; previewMode.value = false
+  editing.value = false; creating.value = false; previewMode.value = false; tagInput.value = ''; tagInputOpen.value = false
   selectedId.value = id
   const session = ++loadSession
   const store = props.store, directory = directorySession
@@ -280,14 +284,15 @@ function beginEdit(create = false, discardConfirmed = false) {
   currentDraftId.value = create ? `${tabDraftId.value}:new:${crypto.randomUUID()}` : `${tabDraftId.value}:note:${selected.value?.documentId || selectedId.value}`
   lastDraftSerialized = ''
   pendingAssets.value = []
+  tagInput.value = ''; tagInputOpen.value = false
   if (create) { selected.value = null; selectedId.value = ''; title.value = ''; tagsText.value = ''; status.value = 'draft'; editMarkdown.value = '# 新笔记\n\n' }
   else { title.value = selected.value?.title || ''; tagsText.value = (selected.value?.tags || []).join(', '); status.value = selected.value?.status || 'draft'; editMarkdown.value = markdown.value }
-  editBaseline.value = `${title.value}\n${tagsText.value}\n${status.value}\n${editMarkdown.value}`
+  editBaseline.value = `${title.value}\n${tagsText.value}\n${tagInput.value}\n${status.value}\n${editMarkdown.value}`
 }
 function cancelEdit(discardConfirmed = false) {
   if (dirty.value && !discardConfirmed) { requestDiscard(() => cancelEdit(true)); return }
   void clearActiveDraft()
-  editing.value = false; creating.value = false; previewMode.value = false; editSession++
+  editing.value = false; creating.value = false; previewMode.value = false; tagInput.value = ''; tagInputOpen.value = false; editSession++
 }
 function requestDiscard(action: () => void) { pendingDiscardAction = action; discardPrompt.value = true; nextTick(() => discardDialogRoot.value?.querySelector<HTMLButtonElement>('button')?.focus()) }
 function keepEditing() {
@@ -420,8 +425,22 @@ function togglePreview() {
     requestAnimationFrame(() => { if (editor.value === el) el.scrollTop = lastSelection.scrollTop })
   })
 }
+function openTagInput() {
+  if (busy.value) return
+  tagInputOpen.value = true
+  nextTick(() => tagInputElement.value?.focus())
+}
+function cancelTagInput() { tagInput.value = ''; tagInputOpen.value = false }
+function confirmTagInput(event?: KeyboardEvent) {
+  if (event && (event.isComposing || event.keyCode === 229)) return
+  const additions = tagInput.value.split(/[,，]/).map(tag => tag.trim()).filter(Boolean)
+  if (additions.length) tagsText.value = [...new Set([...confirmedTags.value, ...additions])].join(', ')
+  tagInput.value = ''; tagInputOpen.value = false
+}
+function removeTag(tag: string) { tagsText.value = confirmedTags.value.filter(value => value !== tag).join(', ') }
 async function save() {
   if (busy.value) return
+  if (tagInputOpen.value) confirmTagInput()
   if (!draftScopeReady.value || !directoryReady.value || !validDocsHead(editorBaseHead.value) || editorStore !== props.store) {
     error.value = editorSourceDocumentId.value && !validDocsHead(editorBaseHead.value)
       ? '无法确认这份草稿的原始版本，已保留内容；请先下载，避免覆盖线上修改。'
@@ -440,7 +459,7 @@ async function save() {
     let currentInsertions: Promise<void>
     do { currentInsertions = imageInsertionTail; await currentInsertions } while (currentInsertions !== imageInsertionTail)
     if (!componentMounted || !store || store !== props.store || storeSession !== directorySession || session !== editSession || baseHead !== editorBaseHead.value) throw new Error('笔记目录或存储已切换；当前草稿仍保留，请刷新后重新编辑。')
-    const payload = { documentId: editorDocumentId.value, sourceDocumentId: editorSourceDocumentId.value, sourceKind: selected.value?.sourceKind || 'personal', title: title.value, tags: tagsText.value.split(',').map(value => value.trim()).filter(Boolean), status: status.value, markdown: editMarkdown.value, assets: pendingAssets.value, sources: selected.value?.sources || [] }
+    const payload = { documentId: editorDocumentId.value, sourceDocumentId: editorSourceDocumentId.value, sourceKind: selected.value?.sourceKind || 'personal', title: title.value, tags: [...new Set([...confirmedTags.value, ...tagInput.value.split(/[,，]/).map(value => value.trim()).filter(Boolean)])], status: status.value, markdown: editMarkdown.value, assets: pendingAssets.value, sources: selected.value?.sources || [] }
     const signature = JSON.stringify(payload)
     if (!pendingRequest.value || pendingRequest.value.signature !== signature) pendingRequest.value = { signature, id: crypto.randomUUID() }
     await persistActiveDraft()
@@ -487,7 +506,7 @@ function currentOfflineDraft(): OfflineNoteDraft | null {
     sourceDocumentId: editorSourceDocumentId.value,
     sourceKind: selected.value?.sourceKind || (editorSourceDocumentId.value ? notes.value.find(note => note.documentId === editorSourceDocumentId.value)?.sourceKind || 'personal' : 'personal'),
     title: title.value,
-    tags: tagsText.value.split(',').map(value => value.trim()).filter(Boolean),
+    tags: [...new Set([...confirmedTags.value, ...tagInput.value.split(/[,，]/).map(value => value.trim()).filter(Boolean)])],
     status: status.value,
     markdown: editMarkdown.value,
     baseHead: editorBaseHead.value,
@@ -586,12 +605,12 @@ async function restoreDraft(draft: OfflineNoteDraft) {
   editorStore = props.store
   currentDraftId.value = claimed.id; editorBaseHead.value = claimed.baseHead; editorSourceDocumentId.value = claimed.sourceDocumentId; editorDocumentId.value = claimed.documentId || claimed.sourceDocumentId || `note-${crypto.randomUUID()}`
   activeDraftNamespace = namespace; activeDraftTabId = restoringTabId
-  title.value = claimed.title; tagsText.value = claimed.tags.join(', '); status.value = claimed.status
+  title.value = claimed.title; tagsText.value = claimed.tags.join(', '); tagInput.value = ''; tagInputOpen.value = false; status.value = claimed.status
   editMarkdown.value = claimed.markdown; pendingAssets.value = claimed.assets.map(asset => ({ ...asset }))
   pendingRequest.value = claimed.pendingRequestId && claimed.pendingRequestSignature
     ? { id: claimed.pendingRequestId, signature: claimed.pendingRequestSignature }
     : null
-  editBaseline.value = `${selected.value?.title || ''}\n${(selected.value?.tags || []).join(', ')}\n${selected.value?.status || 'draft'}\n${markdown.value}`
+  editBaseline.value = `${selected.value?.title || ''}\n${(selected.value?.tags || []).join(', ')}\n\n${selected.value?.status || 'draft'}\n${markdown.value}`
   lastDraftSerialized = ''
   draftStorageState.value = 'saved'; draftSavedAt.value = claimed.updatedAt
   recoveryDrafts.value = recoveryDrafts.value.filter(item => item.id !== claimed.id)
@@ -661,7 +680,7 @@ watch(() => props.active, active => {
 })
 onMounted(() => { didInitialize = true })
 watch(() => props.store, () => { editSession++; busyOwner = null; busy.value = false; void initialize() })
-watch([editing, title, tagsText, status, editMarkdown, pendingAssets, editorBaseHead], scheduleDraftSave)
+watch([editing, title, tagsText, tagInput, status, editMarkdown, pendingAssets, editorBaseHead], scheduleDraftSave)
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 onMounted(() => {
@@ -718,7 +737,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
     </aside>
     <nav v-if="noteSidebarCollapsed" class="notes-rail" aria-label="笔记快捷操作"><button type="button" :disabled="busy" title="论文" aria-label="论文" @click="emit('select-section', 'papers')"><svg viewBox="0 0 24 24"><path d="M5 4.5h10.5A3.5 3.5 0 0 1 19 8v11H8a3 3 0 0 1-3-3zM8 19v-3h11M8 8h7M8 11h7"/></svg></button><button type="button" class="active" title="笔记" aria-label="笔记"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/></svg></button><button type="button" :disabled="busy" title="专题" aria-label="专题" @click="emit('select-section', 'topics')"><svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4zM4 7V5h7l2 2"/></svg></button><button type="button" title="搜索笔记" aria-label="搜索笔记" @click="emit('toggle-sidebar')"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button><button type="button" :disabled="busy || !draftScopeReady || !directoryReady" title="新建笔记" aria-label="新建笔记" @click="beginEdit(true)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></nav>
     <div class="notes-workspace">
-    <header v-if="editing" class="notes-heading"><div class="notes-heading-actions"><span class="draft-storage-status" :class="`is-${draftStorageState}`">{{ draftStorageState === 'saving' ? '本机草稿保存中…' : draftStorageState === 'saved' ? `本机草稿已保存${draftSavedAt ? ` · ${date(draftSavedAt)}` : ''}` : draftStorageState === 'error' ? '本机草稿未保存' : draftStorageState === 'unavailable' ? '本机自动草稿不可用' : '本机草稿自动保存' }}</span><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-secondary preview-toggle" :disabled="busy" @click="togglePreview"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.8"/></svg>{{ previewMode ? '关闭预览' : '预览' }}</button><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !title.trim() || !editMarkdown.trim()" @click="save"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3 8 3.2 3.2L13 4.8"/></svg>{{ busy ? '正在保存…' : isLocalStore ? '保存到本地 Git' : '保存到 GitHub' }}</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div></header>
+    <header v-if="editing" class="notes-heading"><div class="notes-heading-actions"><span class="draft-storage-status" :class="`is-${draftStorageState}`">{{ draftStorageState === 'saving' ? '本机草稿保存中…' : draftStorageState === 'saved' ? `本机草稿已保存${draftSavedAt ? ` · ${date(draftSavedAt)}` : ''}` : draftStorageState === 'error' ? '本机草稿未保存' : draftStorageState === 'unavailable' ? '本机自动草稿不可用' : '本机草稿自动保存' }}</span><span v-if="isLocalStore" class="offline-status"><i></i> 本地 Git · 未同步</span><span v-else class="offline-status"><i></i> GitHub docs · {{ store.branch }}</span><button type="button" class="action-button action-primary save-note-button" :disabled="busy || !title.trim() || !editMarkdown.trim()" @click="save"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3 8 3.2 3.2L13 4.8"/></svg>{{ busy ? '正在保存…' : isLocalStore ? '保存到本地 Git' : '保存到 GitHub' }}</button><button v-if="isLocalStore" type="button" class="action-button action-secondary sync-note-button" :aria-expanded="syncPanelOpen" @click="syncPanelOpen = !syncPanelOpen"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.3 11.8H3.7a2.7 2.7 0 0 1 0-5.4 4.4 4.4 0 0 1 8.4-.7 3.1 3.1 0 0 1 .2 6.1h-.6M8 13V7.8m-2 2 2-2 2 2"/></svg>同步到 GitHub</button></div></header>
     <p v-if="head" class="notes-commit"><details><summary>{{ isLocalStore ? '本地保存详情' : 'GitHub 保存详情' }}</summary><code>{{ head }}</code></details></p>
     <div v-if="discardPrompt" class="discard-backdrop" role="presentation" @keydown="handleDiscardKeydown"><section ref="discardDialogRoot" class="discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title" tabindex="-1"><h2 id="discard-title">修改尚未保存</h2><p>{{ deleteAfterDiscard ? '确认放弃修改后，将继续核对删除的笔记；取消删除不会丢失当前输入。' : '继续编辑可保留当前输入；放弃修改后才会继续离开。' }}</p><div><button type="button" @click="keepEditing">继续编辑</button><button type="button" class="discard-action" @click="discardEdits">放弃修改</button></div></section></div>
     <div v-if="deleteDialog" class="discard-backdrop" role="presentation" @keydown="handleDeleteKeydown"><section ref="deleteDialogRoot" class="delete-note-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1"><h2 id="delete-title">删除 {{ deleteIds.length }} 篇笔记？</h2><p>删除后将从笔记列表和搜索结果中移除，并提交到 {{ isLocalStore ? '本地 Git 演示库' : 'GitHub' }}。</p><small>历史版本保留在 Git 中。</small><ul><li v-for="id in deleteIds" :key="id">{{ notes.find(note => note.documentId === id)?.title || id }}</li></ul><p v-if="error" class="delete-dialog-error" role="alert">{{ error }}</p><div><button type="button" :disabled="deleteBusy" @click="deleteDialog = false; nextTick(restoreDeleteFocus)">取消</button><button type="button" class="note-delete-button" :disabled="deleteBusy" @click="deleteSelectedNotes">{{ deleteBusy ? '正在删除…' : '删除并提交' }}</button></div></section></div>
@@ -729,8 +748,8 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
     <section v-if="isLocalStore && syncPanelOpen" class="sync-info-panel" role="region" aria-label="GitHub 同步说明"><div><h2>GitHub 同步尚未接通</h2><button type="button" class="action-button action-secondary" aria-label="关闭同步说明" @click="syncPanelOpen = false">关闭</button></div><p>当前笔记只保存到此设备的本地测试 Git 库，不会上传到 GitHub 或导入私有知识库。</p><p>真实同步接通后，需要由你在 KnowledgeDB 站点填写 <code>KnowledgeDB-docs</code> 的 Contents 读写令牌；令牌只在当前标签页内存使用。此演示没有令牌输入，也不会请求 GitHub。</p></section>
       <div class="note-content">
         <template v-if="editing">
-          <div class="note-title-area"><input v-model="title" :readonly="busy" aria-label="笔记标题" placeholder="无标题笔记" /><div class="note-meta"><label>来源<select :value="selected?.sourceKind || 'personal'" disabled><option value="personal">个人笔记</option><option value="blog">Blog 阅读</option></select></label><label>状态<select v-model="status" :disabled="busy"><option value="draft">草稿</option><option value="published">正式</option></select></label><div class="note-tags"><button :disabled="busy" v-for="tag in tagsText.split(',').map(tag => tag.trim()).filter(Boolean)" :key="tag" type="button" @click="tagsText = tagsText.split(',').map(value => value.trim()).filter(value => value && value !== tag).join(', ')">{{ tag }} <span aria-hidden="true">×</span></button><input v-model="tagsText" :readonly="busy" aria-label="标签，使用逗号分隔" placeholder="添加标签，逗号分隔" /></div></div></div>
-          <div v-if="!previewMode" class="editor-toolbar" role="toolbar" aria-label="Markdown 格式工具"><button type="button" :disabled="busy" title="标题" aria-label="标题" @click="applyTool('heading')">H1</button><i></i><button type="button" :disabled="busy" title="加粗" aria-label="加粗" @click="applyTool('bold')"><b>B</b></button><button type="button" :disabled="busy" title="斜体" aria-label="斜体" @click="applyTool('italic')"><em>I</em></button><button type="button" :disabled="busy" title="删除线" aria-label="删除线" @click="applyTool('strike')"><s>S</s></button><i></i><button type="button" :disabled="busy" title="无序列表" aria-label="无序列表" @click="applyTool('bullet')"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".8"/><circle cx="4.5" cy="12" r=".8"/><circle cx="4.5" cy="18" r=".8"/></svg></button><button type="button" :disabled="busy" title="编号列表" aria-label="编号列表" @click="applyTool('number')">1.</button><button type="button" :disabled="busy" title="任务列表" aria-label="任务列表" @click="applyTool('task')"><svg viewBox="0 0 24 24"><path d="M4 5h6v6H4zM6 8l1.5 1.5L10 6M13 7h7M13 16h7M4 14h6v6H4z"/></svg></button><i></i><button type="button" :disabled="busy" title="引用" aria-label="引用" @click="applyTool('quote')">“</button><button type="button" :disabled="busy" title="代码" aria-label="代码" @click="applyTool('code')">&lt;/&gt;</button><button type="button" :disabled="busy" title="链接" aria-label="链接" @click="applyTool('link')"><svg viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10.5a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 19.2l1.7-1.7"/></svg></button><span></span><button type="button" :disabled="busy" title="撤销" aria-label="撤销" @click="applyTool('undo')"><svg viewBox="0 0 24 24"><path d="M9 8 5 12l4 4M5 12h8a6 6 0 0 1 6 6"/></svg></button><button type="button" :disabled="busy" title="重做" aria-label="重做" @click="applyTool('redo')"><svg viewBox="0 0 24 24"><path d="m15 8 4 4-4 4M19 12h-8a6 6 0 0 0-6 6"/></svg></button></div>
+          <div class="note-title-area"><input v-model="title" :readonly="busy" aria-label="笔记标题" placeholder="无标题笔记" /><div class="note-meta"><label>来源<select :value="selected?.sourceKind || 'personal'" disabled><option value="personal">个人笔记</option><option value="blog">Blog 阅读</option></select></label><label>状态<select v-model="status" :disabled="busy"><option value="draft">草稿</option><option value="published">正式</option></select></label><div class="note-tags"><button :disabled="busy" v-for="tag in confirmedTags" :key="tag" type="button" :aria-label="`删除标签 ${tag}`" @click="removeTag(tag)">{{ tag }} <span aria-hidden="true">×</span></button><input v-if="tagInputOpen" ref="tagInputElement" v-model="tagInput" :readonly="busy" aria-label="输入标签" placeholder="输入标签" @keydown.enter.prevent="confirmTagInput" @keydown.esc.prevent="cancelTagInput" /><button v-else type="button" class="add-tag-button" :disabled="busy" aria-label="添加标签" title="添加标签" @click="openTagInput">＋</button></div></div></div>
+          <div class="editor-toolbar" role="toolbar" aria-label="Markdown 格式工具"><button type="button" :disabled="busy || previewMode" title="标题" aria-label="标题" @click="applyTool('heading')">H1</button><i></i><button type="button" :disabled="busy || previewMode" title="加粗" aria-label="加粗" @click="applyTool('bold')"><b>B</b></button><button type="button" :disabled="busy || previewMode" title="斜体" aria-label="斜体" @click="applyTool('italic')"><em>I</em></button><button type="button" :disabled="busy || previewMode" title="删除线" aria-label="删除线" @click="applyTool('strike')"><s>S</s></button><i></i><button type="button" :disabled="busy || previewMode" title="无序列表" aria-label="无序列表" @click="applyTool('bullet')"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".8"/><circle cx="4.5" cy="12" r=".8"/><circle cx="4.5" cy="18" r=".8"/></svg></button><button type="button" :disabled="busy || previewMode" title="编号列表" aria-label="编号列表" @click="applyTool('number')">1.</button><button type="button" :disabled="busy || previewMode" title="任务列表" aria-label="任务列表" @click="applyTool('task')"><svg viewBox="0 0 24 24"><path d="M4 5h6v6H4zM6 8l1.5 1.5L10 6M13 7h7M13 16h7M4 14h6v6H4z"/></svg></button><i></i><button type="button" :disabled="busy || previewMode" title="引用" aria-label="引用" @click="applyTool('quote')">“</button><button type="button" :disabled="busy || previewMode" title="代码" aria-label="代码" @click="applyTool('code')">&lt;/&gt;</button><button type="button" :disabled="busy || previewMode" title="链接" aria-label="链接" @click="applyTool('link')"><svg viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10.5a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 19.2l1.7-1.7"/></svg></button><button type="button" :disabled="busy || previewMode" title="撤销" aria-label="撤销" @click="applyTool('undo')"><svg viewBox="0 0 24 24"><path d="M9 8 5 12l4 4M5 12h8a6 6 0 0 1 6 6"/></svg></button><button type="button" :disabled="busy || previewMode" title="重做" aria-label="重做" @click="applyTool('redo')"><svg viewBox="0 0 24 24"><path d="m15 8 4 4-4 4M19 12h-8a6 6 0 0 0-6 6"/></svg></button><span></span><button type="button" class="action-button action-secondary preview-toggle" :disabled="busy" @click="togglePreview"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.8"/></svg>{{ previewMode ? '返回编辑' : '预览' }}</button></div>
           <div v-if="previewMode" class="note-preview-stage"><article ref="previewRoot" class="document-body" v-html="preview" /></div>
           <div v-else class="note-editor-wrap" :class="{ 'drag-active': isDraggingImage }" @dragenter.prevent="captureSelection(); isDraggingImage = true" @dragover.prevent="isDraggingImage = true" @dragleave="isDraggingImage = false" @drop="dropImages"><textarea ref="editor" v-model="editMarkdown" :readonly="busy" spellcheck="false" aria-label="Markdown 正文" placeholder="开始记录你的想法…" @select="saveSelection" @keyup="saveSelection" @click="saveSelection" @scroll="saveSelection" @paste="pasteImages" /><div v-if="isDraggingImage" class="drop-hint">松开以插入图片</div></div>
           <div class="editor-footer"><span>{{ previewMode ? '实时预览' : 'Markdown' }}</span><span v-if="pendingAssets.length" role="status">{{ pendingAssets.length }} 张图片待随笔记保存</span><span v-else>粘贴或拖入图片，自动插入</span><span>{{ editMarkdown.length }} 字</span></div>
