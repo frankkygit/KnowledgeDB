@@ -37,6 +37,8 @@ const statusFilter = ref('published')
 const tagFilter = ref<string[]>([])
 const search = ref('')
 const tagsExpanded = ref(false)
+const tagHelpOpen = ref(false)
+const tagFiltersRoot = ref<HTMLElement | null>(null)
 const editing = ref(false)
 const creating = ref(false)
 const discardPrompt = ref(false)
@@ -123,13 +125,19 @@ const baseFilteredNotes = computed(() => notes.value.filter(note =>
 const tagCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const note of baseFilteredNotes.value) for (const tag of new Set(note.tags || [])) counts.set(tag, (counts.get(tag) || 0) + 1)
-  return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+  return [...counts.entries()].sort(([a, countA], [b, countB]) => countB - countA || a.localeCompare(b))
 })
 const allTags = computed(() => tagCounts.value.map(([tag]) => tag))
 const shownTags = computed(() => {
-  const currentTags = tagsExpanded.value || allTags.value.length <= 6 ? allTags.value : allTags.value.slice(0, 6)
-  return [...new Set([...tagFilter.value, ...currentTags])]
+  return tagsExpanded.value || allTags.value.length <= 3 ? allTags.value : allTags.value.slice(0, 3)
 })
+function onTagHelpDocumentClick(event: MouseEvent) {
+  if (tagHelpOpen.value && !tagFiltersRoot.value?.contains(event.target as Node)) tagHelpOpen.value = false
+}
+function onTagHelpKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && tagHelpOpen.value) tagHelpOpen.value = false
+}
+onMounted(() => { document.addEventListener('click', onTagHelpDocumentClick); document.addEventListener('keydown', onTagHelpKeydown) })
 const visible = computed(() => baseFilteredNotes.value.filter(note => !tagFilter.value.length || tagFilter.value.some(tag => (note.tags || []).includes(tag))).sort((a, b) => b.updated.localeCompare(a.updated)))
 
 async function refresh(keepSelection = true, reopenSelected = true) {
@@ -716,7 +724,7 @@ onMounted(() => {
   window.addEventListener('pageshow', refreshRecoveredDraftsOnReturn)
 })
 function persistBeforePageHide() { void persistActiveDraft(); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace) }
-onBeforeUnmount(() => { editorResizeObserver?.disconnect(); editorResizeObserver = null; componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
+onBeforeUnmount(() => { editorResizeObserver?.disconnect(); editorResizeObserver = null; componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn); document.removeEventListener('click', onTagHelpDocumentClick); document.removeEventListener('keydown', onTagHelpKeydown) })
 onBeforeUnmount(() => { objectUrls.forEach(url => URL.revokeObjectURL(url)) })
 defineExpose({ hasUnsavedChanges: () => dirty.value, confirmLeave })
 let assetLoadGeneration = 0
@@ -756,7 +764,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
       <button type="button" class="new-note-button" title="新建笔记" :disabled="busy || !draftScopeReady || !directoryReady" @click="beginEdit(true)"><span aria-hidden="true">＋</span> 新建笔记</button>
       <div class="note-filter-group"><span>来源</span><div><button v-for="item in [{ id: 'all', label: '全部' }, { id: 'blog', label: 'Blog' }, { id: 'personal', label: '个人' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: sourceFilter === item.id }" @click="sourceFilter = item.id">{{ item.label }}</button></div></div>
       <div class="note-filter-group"><span>状态</span><div><button v-for="item in [{ id: 'published', label: '正式' }, { id: 'draft', label: '草稿' }, { id: 'all', label: '全部' }]" :key="item.id" type="button" :disabled="busy || deleteDialog" :class="{ active: statusFilter === item.id }" @click="statusFilter = item.id">{{ item.label }}</button></div></div>
-      <div class="note-filter-group tag-filters"><div class="tag-header"><span>标签（任意匹配）</span><button v-if="allTags.length > 6" type="button" :disabled="busy || deleteDialog" class="tag-expand-button" :aria-label="tagsExpanded ? '收起标签' : '展开全部标签'" :aria-expanded="tagsExpanded" :title="tagsExpanded ? '收起标签' : '展开全部标签'" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '收起' : '展开' }} <svg viewBox="0 0 16 16" :class="{ rotated: tagsExpanded }"><path d="m4 6 4 4 4-4" /></svg></button></div><div class="tag-chips" :class="{ 'is-expanded': tagsExpanded }"><button v-for="tag in shownTags" :key="tag" type="button" :disabled="busy || deleteDialog" :title="`当前来源、状态和搜索结果中有 ${tagCounts.find(([name]) => name === tag)?.[1] || 0} 篇笔记使用此标签；同一篇只计一次`" :class="{ active: tagFilter.includes(tag) }" @click="toggleTag(tag)">{{ tag }} <small>({{ tagCounts.find(([name]) => name === tag)?.[1] || 0 }})</small></button><small v-if="!allTags.length">暂无标签</small></div><small v-if="allTags.length" class="tag-count-hint">计数按当前来源、状态和搜索统计，不受标签筛选影响；已选多个标签时匹配任意一个</small></div>
+<div ref="tagFiltersRoot" class="note-filter-group tag-filters"><div class="tag-header"><span class="tag-title-info">标签<button type="button" class="tag-info-button" aria-label="标签筛选说明" :aria-expanded="tagHelpOpen" @click.stop="tagHelpOpen = !tagHelpOpen">i</button></span><span class="tag-header-actions"><button v-if="tagFilter.length" type="button" class="tag-clear-button" @click="tagFilter = []">清除所选</button><button v-if="allTags.length > 3" type="button" :disabled="busy || deleteDialog" class="tag-expand-button" :aria-label="tagsExpanded ? '隐藏标签' : '展开标签'" :aria-expanded="tagsExpanded" :title="tagsExpanded ? '隐藏标签' : '展开标签'" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '隐藏标签' : '展开标签' }}</button></span></div><div v-if="tagHelpOpen" class="tag-help-popover" role="dialog" aria-label="标签筛选说明"><button type="button" class="tag-help-close" aria-label="关闭说明" @click="tagHelpOpen = false">×</button><p>计数按当前来源、状态和搜索统计，不受标签筛选影响；已选多个标签时匹配任意一个。</p><p>默认按笔记数从高到低显示前 3 个；展开后显示全部，数量相同时按标签名称排序。</p></div><div class="tag-chips" :class="{ 'is-expanded': tagsExpanded }"><button v-for="tag in shownTags" :key="tag" type="button" :disabled="busy || deleteDialog" :title="`当前来源、状态和搜索结果中有 ${tagCounts.find(([name]) => name === tag)?.[1] || 0} 篇笔记使用此标签；同一篇只计一次`" :class="{ active: tagFilter.includes(tag) }" @click="toggleTag(tag)">{{ tag }} <small>({{ tagCounts.find(([name]) => name === tag)?.[1] || 0 }})</small></button><small v-if="!allTags.length">暂无标签</small></div></div>
       <div class="note-list-heading"><strong>笔记列表</strong><button type="button" :disabled="busy" @click="toggleMultiSelect">{{ multiSelect ? '取消' : '多选' }}</button></div>
       <div v-if="multiSelect" class="note-selection-toolbar"><label><input ref="selectAllCheckbox" type="checkbox" :checked="visible.length > 0 && visible.every(note => selectedForDeletion.includes(note.documentId))" :aria-checked="visible.some(note => selectedForDeletion.includes(note.documentId)) && !visible.every(note => selectedForDeletion.includes(note.documentId)) ? 'mixed' : undefined" :disabled="busy || !visible.length" @change="toggleVisibleSelection" />全选当前筛选</label><span>已选 {{ selectedForDeletion.length }} 篇</span><button type="button" class="note-delete-button" :disabled="busy || !selectedForDeletion.length" @click="requestDelete(selectedForDeletion)">删除所选（{{ selectedForDeletion.length }}）</button></div>
       <nav class="note-list" aria-label="笔记列表"><div v-for="note in visible" :key="note.documentId" class="note-list-row" :class="{ selected: selectedId === note.documentId, 'is-checked': selectedForDeletion.includes(note.documentId) }"><input v-if="multiSelect" type="checkbox" :aria-label="`选择笔记：${note.title}`" :checked="selectedForDeletion.includes(note.documentId)" :disabled="busy" @change="toggleDeleteSelection(note.documentId)" /><button class="note-row-open" type="button" :disabled="busy" :title="note.title" @click="multiSelect ? toggleDeleteSelection(note.documentId) : openNote(note.documentId)"><strong>{{ note.title }}</strong><small>{{ note.sourceKind === 'blog' ? 'Blog' : '个人' }} · {{ note.tags.slice(0, 2).join(' · ') || (note.status === 'draft' ? '草稿' : '正式') }}</small><time>{{ date(note.updated) }}</time></button><div v-if="!multiSelect" class="note-row-menu"><button type="button" class="note-row-menu-trigger" :aria-label="`笔记操作：${note.title}`" :aria-expanded="rowMenuId === note.documentId" :disabled="busy" @click.stop="rowMenuId = rowMenuId === note.documentId ? '' : note.documentId">⋯</button><div v-if="rowMenuId === note.documentId" class="note-row-menu-popup"><button type="button" :disabled="busy" @click="requestDelete([note.documentId], $event.currentTarget as HTMLElement)">删除笔记</button></div></div></div><p v-if="!visible.length" class="hint">没有匹配的笔记。</p></nav>
