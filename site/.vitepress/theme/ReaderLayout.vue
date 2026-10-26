@@ -46,6 +46,12 @@ const outlineRoot = ref<HTMLElement | null>(null)
 let headingObserver: ResizeObserver | null = null
 let headingFrame = 0
 const cacheStatus = ref('')
+const darkTheme = ref(false)
+function applyTheme(dark: boolean, persist = true) {
+  darkTheme.value = dark
+  if (typeof document !== 'undefined' && document.documentElement) document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  if (persist) { try { localStorage.setItem('knowledge-db-theme', dark ? 'dark' : 'light') } catch { /* Theme remains available for this page session. */ } }
+}
 const commentsBusy = ref(false)
 const htmlCache = new RenderCache()
 function goTop() { article.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
@@ -381,6 +387,9 @@ async function connectUsingToken(token: string, remember: boolean, automatic = f
 }
 
 onMounted(async () => {
+  let savedTheme = ''
+  try { savedTheme = localStorage.getItem('knowledge-db-theme') || '' } catch { /* Private browsing may disable storage. */ }
+  applyTheme(savedTheme === 'dark', false)
   window.addEventListener('scroll', scheduleActiveHeading, { passive: true })
   window.addEventListener('resize', scheduleActiveHeading, { passive: true })
   window.addEventListener('pagehide', leavePage)
@@ -439,6 +448,7 @@ onBeforeUnmount(() => { window.removeEventListener('pagehide', leavePage); windo
       <button class="menu-button" :class="{ 'notes-menu-button': activeSection === 'notes' }" type="button" :aria-label="activeSection === 'notes' ? (notesSidebarCollapsed ? '展开侧边栏' : '收起侧边栏') : '切换导航'" :aria-expanded="activeSection === 'notes' ? !notesSidebarCollapsed : menuOpen" @click="activeSection === 'notes' ? notesSidebarCollapsed = !notesSidebarCollapsed : menuOpen = !menuOpen">{{ activeSection === 'notes' ? (notesSidebarCollapsed ? '›|' : '|‹') : '☰' }}</button>
       <a class="brand" :href="withBase('/')">知识库</a>
       <span class="status" role="status">{{ activeSection === 'notes' ? (notesStore?.kind === 'local-demo' ? '离线笔记演示 · 本地 Git，远端未接通' : notesStore ? `GitHub docs · ${notesStore.branch}` : loadStatus) : loadStatus }}</span>
+      <div class="theme-toggle" role="group" aria-label="外观主题"><button type="button" :aria-pressed="!darkTheme" aria-label="浅色主题 明" @click="applyTheme(false)"><span aria-hidden="true">☀</span>明</button><button type="button" :aria-pressed="darkTheme" aria-label="深色主题 暗" @click="applyTheme(true)"><span aria-hidden="true">☾</span>暗</button></div>
       <button v-if="connected" class="disconnect-button" @click="disconnect()">断开连接</button>
       <button v-if="connected" class="disconnect-button" @click="forgetAuthorization">退出并清除本机授权</button>
     </header>

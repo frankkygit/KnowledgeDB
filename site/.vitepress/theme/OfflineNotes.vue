@@ -69,6 +69,24 @@ const syncPanelOpen = ref(false)
 const readerRoot = ref<HTMLElement | null>(null)
 const previewRoot = ref<HTMLElement | null>(null)
 const editor = ref<HTMLTextAreaElement | null>(null)
+const lineMirror = ref<HTMLElement | null>(null)
+const lineElements: HTMLElement[] = []
+const lineNumbers = computed(() => Array.from({ length: editMarkdown.value.split('\n').length }, (_, index) => index + 1))
+const linePositions = ref<number[]>([])
+const activeLine = ref(1)
+let editorResizeObserver: ResizeObserver | null = null
+function setLineElement(element: Element | null, index: number) { if (element) lineElements[index] = element as HTMLElement }
+function updateLineGutter() {
+  const textarea = editor.value, mirror = lineMirror.value
+  if (!textarea || !mirror) return
+  const styles = getComputedStyle(textarea)
+  mirror.style.width = `${Math.max(0, textarea.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight))}px`
+  mirror.style.top = styles.paddingTop
+  const bounds = mirror.getBoundingClientRect()
+  linePositions.value = lineElements.slice(0, lineNumbers.value.length).map(element => element ? parseFloat(styles.paddingTop) + element.getBoundingClientRect().top - bounds.top : 0)
+  activeLine.value = editMarkdown.value.slice(0, textarea.selectionStart).split('\n').length
+}
+function syncEditorGutter() { updateLineGutter(); saveSelection() }
 const previewMode = ref(false)
 const noteSidebarCollapsed = computed(() => props.sidebarCollapsed)
 const isLocalStore = computed(() => props.store.kind === 'local-demo')
@@ -257,6 +275,15 @@ watch(visible, current => {
   selectedForDeletion.value = selectedForDeletion.value.filter(id => ids.has(id))
   if (rowMenuId.value && !ids.has(rowMenuId.value)) rowMenuId.value = ''
 }, { deep: true })
+watch([editMarkdown, editing, previewMode], () => nextTick(updateLineGutter))
+watch(editor, textarea => {
+  editorResizeObserver?.disconnect(); editorResizeObserver = null
+  if (textarea && typeof ResizeObserver !== 'undefined') {
+    editorResizeObserver = new ResizeObserver(() => nextTick(updateLineGutter))
+    editorResizeObserver.observe(textarea)
+  }
+  nextTick(updateLineGutter)
+}, { flush: 'post' })
 watch([sourceFilter, statusFilter, tagFilter, search], () => {
   selectedForDeletion.value = []
   if (deleteDialog.value) { deleteDialog.value = false; deleteIds.value = [] }
@@ -689,7 +716,7 @@ onMounted(() => {
   window.addEventListener('pageshow', refreshRecoveredDraftsOnReturn)
 })
 function persistBeforePageHide() { void persistActiveDraft(); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace) }
-onBeforeUnmount(() => { componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
+onBeforeUnmount(() => { editorResizeObserver?.disconnect(); editorResizeObserver = null; componentMounted = false; busyOwner = null; directorySession++; editSession++; if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = null }; void persistActiveDraft(); if (draftLeaseTimer) clearInterval(draftLeaseTimer); if (tabDraftId.value) void releaseDraftTabLease(tabDraftId.value, props.store.namespace); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', persistBeforePageHide); window.removeEventListener('focus', refreshRecoveredDraftsOnReturn); window.removeEventListener('pageshow', refreshRecoveredDraftsOnReturn) })
 onBeforeUnmount(() => { objectUrls.forEach(url => URL.revokeObjectURL(url)) })
 defineExpose({ hasUnsavedChanges: () => dirty.value, confirmLeave })
 let assetLoadGeneration = 0
@@ -751,7 +778,7 @@ watch([() => selected.value?.documentId, markdown, editMarkdown, editing, previe
           <div class="note-title-area"><input v-model="title" :readonly="busy" aria-label="笔记标题" placeholder="无标题笔记" /><div class="note-meta"><label>来源<select :value="selected?.sourceKind || 'personal'" disabled><option value="personal">个人笔记</option><option value="blog">Blog 阅读</option></select></label><label>状态<select v-model="status" :disabled="busy"><option value="draft">草稿</option><option value="published">正式</option></select></label><div class="note-tags"><button :disabled="busy" v-for="tag in confirmedTags" :key="tag" type="button" :aria-label="`删除标签 ${tag}`" @click="removeTag(tag)">{{ tag }} <span aria-hidden="true">×</span></button><input v-if="tagInputOpen" ref="tagInputElement" v-model="tagInput" :readonly="busy" aria-label="输入标签" placeholder="输入标签" @keydown.enter.prevent="confirmTagInput" @keydown.esc.prevent="cancelTagInput" /><button v-else type="button" class="add-tag-button" :disabled="busy" aria-label="添加标签" title="添加标签" @click="openTagInput">＋</button></div></div></div>
           <div class="editor-toolbar" role="toolbar" aria-label="Markdown 格式工具"><button type="button" :disabled="busy || previewMode" title="标题" aria-label="标题" @click="applyTool('heading')">H1</button><i></i><button type="button" :disabled="busy || previewMode" title="加粗" aria-label="加粗" @click="applyTool('bold')"><b>B</b></button><button type="button" :disabled="busy || previewMode" title="斜体" aria-label="斜体" @click="applyTool('italic')"><em>I</em></button><button type="button" :disabled="busy || previewMode" title="删除线" aria-label="删除线" @click="applyTool('strike')"><s>S</s></button><i></i><button type="button" :disabled="busy || previewMode" title="无序列表" aria-label="无序列表" @click="applyTool('bullet')"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".8"/><circle cx="4.5" cy="12" r=".8"/><circle cx="4.5" cy="18" r=".8"/></svg></button><button type="button" :disabled="busy || previewMode" title="编号列表" aria-label="编号列表" @click="applyTool('number')">1.</button><button type="button" :disabled="busy || previewMode" title="任务列表" aria-label="任务列表" @click="applyTool('task')"><svg viewBox="0 0 24 24"><path d="M4 5h6v6H4zM6 8l1.5 1.5L10 6M13 7h7M13 16h7M4 14h6v6H4z"/></svg></button><i></i><button type="button" :disabled="busy || previewMode" title="引用" aria-label="引用" @click="applyTool('quote')">“</button><button type="button" :disabled="busy || previewMode" title="代码" aria-label="代码" @click="applyTool('code')">&lt;/&gt;</button><button type="button" :disabled="busy || previewMode" title="链接" aria-label="链接" @click="applyTool('link')"><svg viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7M14 10.5a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 19.2l1.7-1.7"/></svg></button><button type="button" :disabled="busy || previewMode" title="撤销" aria-label="撤销" @click="applyTool('undo')"><svg viewBox="0 0 24 24"><path d="M9 8 5 12l4 4M5 12h8a6 6 0 0 1 6 6"/></svg></button><button type="button" :disabled="busy || previewMode" title="重做" aria-label="重做" @click="applyTool('redo')"><svg viewBox="0 0 24 24"><path d="m15 8 4 4-4 4M19 12h-8a6 6 0 0 0-6 6"/></svg></button><span></span><button type="button" class="action-button action-secondary preview-toggle" :disabled="busy" @click="togglePreview"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.8"/></svg>{{ previewMode ? '返回编辑' : '预览' }}</button></div>
           <div v-if="previewMode" class="note-preview-stage"><article ref="previewRoot" class="document-body" v-html="preview" /></div>
-          <div v-else class="note-editor-wrap" :class="{ 'drag-active': isDraggingImage }" @dragenter.prevent="captureSelection(); isDraggingImage = true" @dragover.prevent="isDraggingImage = true" @dragleave="isDraggingImage = false" @drop="dropImages"><textarea ref="editor" v-model="editMarkdown" :readonly="busy" spellcheck="false" aria-label="Markdown 正文" placeholder="开始记录你的想法…" @select="saveSelection" @keyup="saveSelection" @click="saveSelection" @scroll="saveSelection" @paste="pasteImages" /><div v-if="isDraggingImage" class="drop-hint">松开以插入图片</div></div>
+          <div v-else class="note-editor-wrap" :class="{ 'drag-active': isDraggingImage }" @dragenter.prevent="captureSelection(); isDraggingImage = true" @dragover.prevent="isDraggingImage = true" @dragleave="isDraggingImage = false" @drop="dropImages"><div class="line-gutter" aria-hidden="true"><span v-for="(line, index) in lineNumbers" :key="index" :class="{ active: activeLine === line }" :style="{ top: `${(linePositions[index] || 0) - (editor?.scrollTop || 0)}px` }">{{ line }}</span></div><div ref="lineMirror" class="line-mirror" aria-hidden="true"><span v-for="(line, index) in editMarkdown.split('\n')" :key="index" :ref="element => setLineElement(element, index)">{{ line || '\u200b' }}</span></div><textarea ref="editor" v-model="editMarkdown" :readonly="busy" spellcheck="false" aria-label="Markdown 正文" placeholder="开始记录你的想法…" @select="syncEditorGutter" @keyup="syncEditorGutter" @click="syncEditorGutter" @scroll="syncEditorGutter" @input="updateLineGutter" @paste="pasteImages" /><div v-if="isDraggingImage" class="drop-hint">松开以插入图片</div></div>
           <div class="editor-footer"><span>{{ previewMode ? '实时预览' : 'Markdown' }}</span><span v-if="pendingAssets.length" role="status">{{ pendingAssets.length }} 张图片待随笔记保存</span><span v-else>粘贴或拖入图片，自动插入</span><span>{{ editMarkdown.length }} 字</span></div>
           <p v-if="selected?.sourceKind === 'blog'" class="source-card"><strong>原始出处保持关联</strong><br />{{ selected.sources?.[0]?.originalTitle }} · {{ selected.sources?.[0]?.author || '作者待核对' }} · {{ selected.sources?.[0]?.siteName }}<br /><a v-if="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" :href="safeSourceUrl(selected.sources?.[0]?.canonicalUrl)" target="_blank" rel="noopener noreferrer">{{ selected.sources?.[0]?.canonicalUrl }}</a> · 访问于 {{ selected.sources?.[0]?.accessedAt }}</p>
           <button v-if="error || draftStorageState === 'error' || draftStorageState === 'unavailable'" type="button" class="action-button action-secondary" @click="downloadDraft">下载当前草稿</button>

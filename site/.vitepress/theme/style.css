@@ -211,6 +211,12 @@ button:disabled { cursor: default; opacity: .55; }
 .editor-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
 .note-editor-wrap { position: relative; min-height: min(58vh, 680px); border: 1px solid #dce5ed; border-top: 0; border-radius: 0 0 8px 8px; background: white; }
 .note-editor-wrap textarea { display: block; width: 100%; min-height: min(58vh, 680px); resize: vertical; padding: 18px 16px; border: 0; border-radius: inherit; outline-color: #a9cdef; color: #142744; background: transparent; font: 15px/1.85 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
+.note-editor-wrap textarea { padding-left: 64px; }
+.line-gutter { position: absolute; z-index: 1; top: 0; bottom: 0; left: 0; width: 48px; overflow: hidden; border-right: 1px solid #e1e8ef; background: #f8fafb; color: #8793a1; font: 13px/1.85 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; user-select: none; }
+.line-gutter span { position: absolute; right: 7px; min-width: 24px; height: 1.85em; text-align: right; }
+.line-gutter span.active { color: #155d9e; font-weight: 700; }
+.line-mirror { position: absolute; top: 18px; right: 16px; left: 64px; visibility: hidden; white-space: normal; overflow-wrap: anywhere; word-break: break-word; font: 15px/1.85 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; pointer-events: none; }
+.line-mirror span { display: block; min-height: 1.85em; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note-editor-wrap textarea::placeholder { color: #91a0b0; }
 .note-editor-wrap.drag-active { outline: 2px dashed #438bcc; outline-offset: -7px; background: #f5faff; }
 .drop-hint { position: absolute; inset: 0; display: grid; place-items: center; color: #155d9e; background: #e6f3ffcf; pointer-events: none; font-weight: 700; }
@@ -248,6 +254,87 @@ button:disabled { cursor: default; opacity: .55; }
 .delete-note-dialog > div { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .delete-note-dialog > div > button { height: 36px; border: 1px solid #c8d6e3; border-radius: 8px; padding: 0 14px; background: #fff; color: #285578; font-size: 14px; }
 .delete-note-dialog > div > .note-delete-button { border-color: #a84646 !important; color: #fff !important; background: #a84646 !important; font-size: 14px; }
+
+/* Global reader theme: light remains the default; dark colors stay scoped to the app shell. */
+.theme-toggle { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid #d7e1e9; border-radius: 8px; color: #31465a; background: #fff; white-space: nowrap; }
+.theme-toggle button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 8px; border: 0; border-radius: 5px; color: inherit; background: transparent; font-size: 13px; }
+.theme-toggle button[aria-pressed="true"] { color: #244d76; background: #eaf0f5; font-weight: 650; }
+.theme-toggle button span { font-size: 15px; line-height: 1; }
+html[data-theme="dark"] { color-scheme: dark; background: #111821; color: #92a4b9; }
+html[data-theme="dark"] body, html[data-theme="dark"] .reader-shell { color: #92a4b9; background: #111821; }
+html[data-theme="dark"] .topbar, html[data-theme="dark"] .sidebar, html[data-theme="dark"] .offline-notes, html[data-theme="dark"] .notes-sidebar,
+html[data-theme="dark"] .connection-card, html[data-theme="dark"] .empty-document, html[data-theme="dark"] .search-result,
+html[data-theme="dark"] .note-preview-stage, html[data-theme="dark"] .discard-dialog, html[data-theme="dark"] .delete-note-dialog,
+html[data-theme="dark"] .comment-composer { color: #92a4b9; background-color: #17212d; border-color: #344457; }
+html[data-theme="dark"] .content, html[data-theme="dark"] .notes-workspace { color: #92a4b9; background: #111821; }
+html[data-theme="dark"] .brand, html[data-theme="dark"] h1, html[data-theme="dark"] h2, html[data-theme="dark"] h3,
+html[data-theme="dark"] .document-body h1, html[data-theme="dark"] .document-body h2, html[data-theme="dark"] .document-body h3,
+html[data-theme="dark"] .document-body h4, html[data-theme="dark"] .note-title-area input { color: #cad5e3; }
+html[data-theme="dark"] .status, html[data-theme="dark"] .hint, html[data-theme="dark"] .paper-meta,
+html[data-theme="dark"] .document-body, html[data-theme="dark"] .document-body blockquote,
+html[data-theme="dark"] .note-list-heading, html[data-theme="dark"] .editor-footer,
+html[data-theme="dark"] .comment-summary, html[data-theme="dark"] .comment-thread { color: #92a4b9; }
+html[data-theme="dark"] .section-tabs, html[data-theme="dark"] .search-input, html[data-theme="dark"] .list-empty,
+html[data-theme="dark"] .document-body blockquote, html[data-theme="dark"] .document-body code,
+html[data-theme="dark"] .document-body pre, html[data-theme="dark"] .document-body th,
+html[data-theme="dark"] .note-section-tabs, html[data-theme="dark"] .note-list-row,
+html[data-theme="dark"] .note-row-menu-popup, html[data-theme="dark"] .note-filter-group,
+html[data-theme="dark"] .source-card, html[data-theme="dark"] .note-commit,
+html[data-theme="dark"] .comment-composer blockquote { color: #92a4b9; background-color: #1b2735; border-color: #344457; }
+html[data-theme="dark"] input, html[data-theme="dark"] select, html[data-theme="dark"] textarea,
+html[data-theme="dark"] .note-editor-wrap { color: #cad5e3; background-color: #1b2735; border-color: #344457; }
+html[data-theme="dark"] .note-editor-wrap textarea { color: #cad5e3; background: transparent; }
+html[data-theme="dark"] .line-gutter { color: #92a4b9; background: #17212d; border-color: #344457; }
+html[data-theme="dark"] .line-gutter span.active, html[data-theme="dark"] a { color: #78b6f3; }
+html[data-theme="dark"] .theme-toggle, html[data-theme="dark"] .disconnect-button, html[data-theme="dark"] .stored-auth-retry,
+html[data-theme="dark"] .editor-toolbar, html[data-theme="dark"] .editor-toolbar button,
+html[data-theme="dark"] .comment-form input, html[data-theme="dark"] .comment-composer textarea { color: #cad5e3; background-color: #17212d; border-color: #344457; }
+html[data-theme="dark"] .theme-toggle button[aria-pressed="true"] { color: #78b6f3; background: #1b2735; }
+html[data-theme="dark"] .section-tabs button.active, html[data-theme="dark"] .document-tabs button.active,
+html[data-theme="dark"] .note-list-row.selected, html[data-theme="dark"] .paper-item.selected { color: #78b6f3; background: #1b2735; border-color: #78b6f3; }
+html[data-theme="dark"] .paper-item, html[data-theme="dark"] .search-result, html[data-theme="dark"] .note-row-open,
+html[data-theme="dark"] .notes-rail, html[data-theme="dark"] .note-editor-wrap { background-color: #17212d; border-color: #344457; }
+html[data-theme="dark"] .paper-item strong, html[data-theme="dark"] .search-result strong,
+html[data-theme="dark"] .note-list-row strong, html[data-theme="dark"] .note-row-open strong { color: #cad5e3; }
+html[data-theme="dark"] .document-body th, html[data-theme="dark"] .document-body td,
+html[data-theme="dark"] .document-tabs, html[data-theme="dark"] .note-editor-wrap,
+html[data-theme="dark"] .editor-toolbar, html[data-theme="dark"] .comment-thread { border-color: #344457; }
+html[data-theme="dark"] .document-body img { filter: none; }
+html[data-theme="dark"] .reader-error { color: #ffc2b8; background: #3a2528; }
+html[data-theme="dark"] .delete-dialog-error { color: #ffc2b8 !important; background: #3a2528; }
+html[data-theme="dark"] .offline-notes .action-button.action-secondary,
+html[data-theme="dark"] .note-selection-toolbar button, html[data-theme="dark"] .note-list-heading button,
+html[data-theme="dark"] .note-row-menu-popup button, html[data-theme="dark"] .note-filter-group button,
+html[data-theme="dark"] .note-tags button, html[data-theme="dark"] .note-tags .add-tag-button,
+html[data-theme="dark"] .notes-rail button, html[data-theme="dark"] .note-meta select,
+html[data-theme="dark"] .discard-dialog button, html[data-theme="dark"] .delete-note-dialog > div > button:not(.note-delete-button) {
+  color: #cad5e3; background-color: #17212d; border-color: #344457;
+}
+html[data-theme="dark"] .note-tags button, html[data-theme="dark"] .note-tags .add-tag-button,
+html[data-theme="dark"] .notes-rail button.active, html[data-theme="dark"] .notes-rail button:hover,
+html[data-theme="dark"] .note-filter-group button.active { color: #78b6f3; background-color: #1b2735; }
+html[data-theme="dark"] .note-filter-group, html[data-theme="dark"] .note-selection-toolbar,
+html[data-theme="dark"] .draft-recovery-area, html[data-theme="dark"] .draft-recovery,
+html[data-theme="dark"] .draft-recovery li, html[data-theme="dark"] .sync-info-panel,
+html[data-theme="dark"] .note-row-menu-popup { color: #92a4b9; background-color: #17212d; border-color: #344457; }
+html[data-theme="dark"] .note-row-menu-popup button { color: #ffc2b8; }
+html[data-theme="dark"] .note-row-menu-popup button:hover { background: #3a2528; }
+html[data-theme="dark"] .note-list-row.is-checked { background: #1b2735; border-color: #344457; }
+html[data-theme="dark"] .note-meta > label { border-color: #344457; }
+html[data-theme="dark"] .reading-tools { background: #111821f5; border-color: #344457; }
+html[data-theme="dark"] .reading-tools button, html[data-theme="dark"] .comments-panel button,
+html[data-theme="dark"] .paragraph-comment, html[data-theme="dark"] .back-to-top,
+html[data-theme="dark"] .outline-toggle { color: #cad5e3; background: #17212d; border-color: #344457; }
+html[data-theme="dark"] .quote-comment { color: #cad5e3; background: #1b2735; border-color: #344457; }
+html[data-theme="dark"] .floating-outline:hover, html[data-theme="dark"] .floating-outline:focus-within,
+html[data-theme="dark"] .floating-outline.is-open { background: #17212df2; border: 1px solid #344457; }
+html[data-theme="dark"] .outline-item:hover, html[data-theme="dark"] .outline-item:focus-visible,
+html[data-theme="dark"] .outline-item.active { color: #cad5e3; }
+html[data-theme="dark"] .floating-outline:hover .outline-item:hover,
+html[data-theme="dark"] .floating-outline:focus-within .outline-item:focus-visible,
+html[data-theme="dark"] .floating-outline:focus-within .outline-item.active { background: #1b2735; }
+html[data-theme="dark"] .outline-item.active .outline-title, html[data-theme="dark"] .outline-item:hover .outline-title { color: #cad5e3; }
+@media (max-width: 760px) { .theme-toggle button { padding-inline: 6px; } .topbar:has(+ .reader-grid.notes-active) .theme-toggle { margin-left: auto; } }
 @media (max-width: 760px) {
   .offline-notes { grid-template-columns: minmax(0,1fr); }
   .notes-sidebar { position: fixed; z-index: 11; top: 46px; left: 0; width: min(86vw,320px); height: calc(100dvh - 46px); min-height: 0; box-shadow: 12px 0 32px #1a2c3c1a; }
